@@ -21,7 +21,7 @@ Demo en **Svelte + Vite** que conecta con **Pali Wallet** (inyectada como `windo
 En la carpeta del proyecto:
 
 ```bash
-cd svelte-pali-wallet
+cd PaliWallet-VIP-Dashboard
 npm install
 npm run dev
 ```
