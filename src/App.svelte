@@ -10,11 +10,10 @@
   let copied = false
 
   async function requestPermissionsIfSupported() {
-    if (!window.ethereum?.request) return
-    // Some wallets will show a permissions modal even if already connected.
-    // Fallback safely if unsupported.
+    const ethereum = window['ethereum']
+    if (!ethereum?.request) return
     try {
-      await window.ethereum.request({
+      await ethereum.request({
         method: 'wallet_requestPermissions',
         params: [{ eth_accounts: {} }],
       })
@@ -24,9 +23,10 @@
   }
 
   async function revokePermissionsIfSupported() {
-    if (!window.ethereum?.request) return
+    const ethereum = window['ethereum']
+    if (!ethereum?.request) return
     try {
-      await window.ethereum.request({
+      await ethereum.request({
         method: 'wallet_revokePermissions',
         params: [{ eth_accounts: {} }],
       })
@@ -36,32 +36,32 @@
   }
 
   function handleChainChanged(chainHex) {
-    // chainHex es un string tipo '0x....'
     chainId = parseInt(chainHex, 16).toString()
   }
+
+  // Conexión con Pali Wallet y obtención de cuenta/saldo
   async function connectWallet() {
     error = ''
     loading = true
     try {
-      if (!window.ethereum) {
+      const ethereum = window['ethereum']
+      if (!ethereum) {
         error = 'Pali Wallet no detectada. Instálala como extensión del navegador.'
         return
       }
       await requestPermissionsIfSupported()
-      await window.ethereum.request({ method: 'eth_requestAccounts' })
-      const provider = new ethers.BrowserProvider(window.ethereum)
+      await ethereum.request({ method: 'eth_requestAccounts' })
+      const provider = new ethers.BrowserProvider(ethereum)
       const signer = await provider.getSigner()
       address = await signer.getAddress()
       const rawBalance = await provider.getBalance(address)
       balance = ethers.formatEther(rawBalance)
 
-      // Obtener el chainId de la red conectada
       const network = await provider.getNetwork()
       chainId = network.chainId.toString()
 
-      // Configurar escucha de cambio de red
-      if (window.ethereum.on) {
-        window.ethereum.on('chainChanged', handleChainChanged)
+      if (ethereum.on) {
+        ethereum.on('chainChanged', handleChainChanged)
       }
 
       connected = true
@@ -77,11 +77,10 @@
     balance = ''
     chainId = ''
     connected = false
-    // Quitar escucha de cambio de red para evitar memoria retenida.
-    if (window.ethereum?.removeListener) {
-      window.ethereum.removeListener('chainChanged', handleChainChanged)
+    const ethereum = window['ethereum']
+    if (ethereum?.removeListener) {
+      ethereum.removeListener('chainChanged', handleChainChanged)
     }
-    // Best-effort: try to revoke permissions so next connect prompts again (if supported).
     revokePermissionsIfSupported()
   }
 
@@ -639,25 +638,6 @@
     letter-spacing: 0.1em;
   }
 
-  /* Layout dos columnas */
-  .wallet-layout {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 1.25rem;
-    text-align: left;
-  }
-
-  .col-left {
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-  }
-
-  .col-right {
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-  }
 
   /* Info grid */
   .info-box {
