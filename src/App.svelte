@@ -3,6 +3,7 @@
 
   let address = ''
   let balance = ''
+  let chainId = ''
   let error = ''
   let connected = false
   let loading = false
@@ -34,6 +35,10 @@
     }
   }
 
+  function handleChainChanged(chainHex) {
+    // chainHex es un string tipo '0x....'
+    chainId = parseInt(chainHex, 16).toString()
+  }
   async function connectWallet() {
     error = ''
     loading = true
@@ -49,6 +54,16 @@
       address = await signer.getAddress()
       const rawBalance = await provider.getBalance(address)
       balance = ethers.formatEther(rawBalance)
+
+      // Obtener el chainId de la red conectada
+      const network = await provider.getNetwork()
+      chainId = network.chainId.toString()
+
+      // Configurar escucha de cambio de red
+      if (window.ethereum.on) {
+        window.ethereum.on('chainChanged', handleChainChanged)
+      }
+
       connected = true
     } catch (err) {
       error = err.message || 'Error al conectar la wallet'
@@ -60,7 +75,12 @@
   function disconnect() {
     address = ''
     balance = ''
+    chainId = ''
     connected = false
+    // Quitar escucha de cambio de red para evitar memoria retenida.
+    if (window.ethereum?.removeListener) {
+      window.ethereum.removeListener('chainChanged', handleChainChanged)
+    }
     // Best-effort: try to revoke permissions so next connect prompts again (if supported).
     revokePermissionsIfSupported()
   }
@@ -126,7 +146,7 @@
             <line x1="2" y1="12" x2="22" y2="12"/>
             <path d="M12 2a15.3 15.3 0 010 20M12 2a15.3 15.3 0 000 20"/>
           </svg>
-          <span>Web3</span>
+          <span>ethers</span>
         </div>
         <div class="trust-item">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="rgba(207, 210, 218, 0.9)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -241,9 +261,9 @@
             <div class="network-dot"></div>
             <div>
               <p class="info-label">Red activa</p>
-              <p class="info-value">Syscoin Network</p>
+              <p class="info-value">{chainId ? `Chain ID ${chainId}` : 'Desconocida'}</p>
             </div>
-            <div class="network-badge">Mainnet</div>
+            <div class="network-badge">{chainId ? (chainId === '5700' ? 'Syscoin' : 'Otra') : 'N/A'}</div>
           </div>
         </div>
 
