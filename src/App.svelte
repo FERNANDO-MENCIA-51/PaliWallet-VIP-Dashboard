@@ -1,872 +1,662 @@
 <script>
-  import { ethers } from 'ethers'
+    import { ethers } from 'ethers';
+    import { onMount, tick } from 'svelte';
+    import Intro from './lib/Intro.svelte';
+    import Wallet from './lib/Wallet.svelte';
+    import Transfer from './lib/Transfer.svelte';
+    import Networks from './lib/Networks.svelte';
 
-  let address = ''
-  let balance = ''
-  let chainId = ''
-  let error = ''
-  let connected = false
-  let loading = false
-  let copied = false
+    let address = '';
+    let balance = '';
+    let chainId = '';
+    let error = '';
+    let connected = false;
+    let loading = false;
+    let provider = /** @type {any} */ (null);
+    let signer = /** @type {any} */ (null);
 
-  async function requestPermissionsIfSupported() {
-    const ethereum = window['ethereum']
-    if (!ethereum?.request) return
-    try {
-      await ethereum.request({
-        method: 'wallet_requestPermissions',
-        params: [{ eth_accounts: {} }],
-      })
-    } catch {
-      // ignore
+    /** @type {Array<{hash: string, to: string, amount: string, type: string, timestamp: string, chainId: string, explorerBase?: string}>} */
+    let history = [];
+    let activeTab = 'intro';
+
+    const tabs = [
+        { id: 'intro', label: 'Inicio', icon: 'M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6' },
+        { id: 'wallet', label: 'Dashboard', icon: 'M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z' },
+        { id: 'transfer', label: 'Transferir', icon: 'M5 13l4 4L19 7M4 7h16M4 17h7' },
+        { id: 'networks', label: 'Gestor de Redes', icon: 'M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z' }
+    ];
+
+    onMount(() => {
+        animateLayout();
+        tryAutoReconnect(); 
+    });
+
+    // Cargar historial cuando cambie la dirección
+    $: if (address) {
+        loadHistory(address);
     }
-  }
 
-  async function revokePermissionsIfSupported() {
-    const ethereum = window['ethereum']
-    if (!ethereum?.request) return
-    try {
-      await ethereum.request({
-        method: 'wallet_revokePermissions',
-        params: [{ eth_accounts: {} }],
-      })
-    } catch {
-      // ignore
+    function loadHistory(addr) {
+        const saved = localStorage.getItem(`pali_history_${addr.toLowerCase()}`);
+        history = saved ? JSON.parse(saved) : [];
     }
-  }
 
-  function handleChainChanged(chainHex) {
-    chainId = parseInt(chainHex, 16).toString()
-  }
-
-  // Conexión con Pali Wallet y obtención de cuenta/saldo
-  async function connectWallet() {
-    error = ''
-    loading = true
-    try {
-      const ethereum = window['ethereum']
-      if (!ethereum) {
-        error = 'Pali Wallet no detectada. Instálala como extensión del navegador.'
-        return
-      }
-      await requestPermissionsIfSupported()
-      await ethereum.request({ method: 'eth_requestAccounts' })
-      const provider = new ethers.BrowserProvider(ethereum)
-      const signer = await provider.getSigner()
-      address = await signer.getAddress()
-      const rawBalance = await provider.getBalance(address)
-      balance = ethers.formatEther(rawBalance)
-
-      const network = await provider.getNetwork()
-      chainId = network.chainId.toString()
-
-      if (ethereum.on) {
-        ethereum.on('chainChanged', handleChainChanged)
-      }
-
-      connected = true
-    } catch (err) {
-      error = err.message || 'Error al conectar la wallet'
-    } finally {
-      loading = false
+    function getExplorerBase(id) {
+        switch (id) {
+            case '570':
+                return 'https://explorer.rollux.com/tx/';
+            case '57000':
+                return 'https://rollux.tanenbaum.io/tx/';
+            case '57':
+                return 'https://explorer.syscoin.org/tx/';
+            case '5700':
+                return 'https://explorer.tanenbaum.io/tx/';
+            case '57042':
+                return 'https://explorer-pob.dev11.top/tx/';
+            case '57057':
+                return 'https://explorer-zk.tanenbaum.io/tx/';
+            case '1':
+                return 'https://etherscan.io/tx/';
+            case '11155111':
+                return 'https://sepolia.etherscan.io/tx/';
+            case '137':
+                return 'https://polygonscan.com/tx/';
+            case '56':
+                return 'https://bscscan.com/tx/';
+            case '43114':
+                return 'https://snowtrace.io/tx/';
+            default:
+                return 'https://explorer.syscoin.org/tx/';
+        }
     }
-  }
 
-  function disconnect() {
-    address = ''
-    balance = ''
-    chainId = ''
-    connected = false
-    const ethereum = window['ethereum']
-    if (ethereum?.removeListener) {
-      ethereum.removeListener('chainChanged', handleChainChanged)
+    function recordTransaction(tx) {
+        if (!address) return;
+        const newEntry = {
+            ...tx,
+            timestamp: new Date().toISOString(),
+            chainId: chainId,
+            explorerBase: getExplorerBase(chainId)
+        };
+        history = [newEntry, ...history];
+        localStorage.setItem(`pali_history_${address.toLowerCase()}`, JSON.stringify(history));
     }
-    revokePermissionsIfSupported()
-  }
 
-  function shortAddress(addr) {
-    return addr ? addr.slice(0, 6) + '...' + addr.slice(-4) : ''
-  }
+    function animateLayout() {
+        const win = /** @type {any} */ (window);
+        if (win.anime) {
+            win.anime({
+                targets: '.sidebar',
+                translateX: [-280, 0],
+                easing: 'easeOutExpo',
+                duration: 1500
+            });
+            win.anime({
+                targets: '.main-content',
+                opacity: [0, 1],
+                easing: 'linear',
+                duration: 800,
+                delay: 300
+            });
+        }
+    }
 
-  async function copyAddress() {
-    await navigator.clipboard.writeText(address)
-    copied = true
-    setTimeout(() => copied = false, 2000)
-  }
+    async function tryAutoReconnect() {
+        const wasConnected = sessionStorage.getItem('pali_connected');
+        if (!wasConnected) return;
+
+        const ethereum = window['ethereum'];
+        if (!ethereum) return;
+
+        try {
+            const accounts = await ethereum.request({ method: 'eth_accounts' });
+            if (accounts && accounts.length > 0) {
+                provider = new ethers.BrowserProvider(ethereum);
+                signer = await provider.getSigner();
+                address = await signer.getAddress();
+                const rawBalance = await provider.getBalance(address);
+                balance = ethers.formatEther(rawBalance);
+                const network = await provider.getNetwork();
+                chainId = network.chainId.toString();
+
+                setupListeners(ethereum);
+                connected = true;
+                changeTab('wallet');
+            } else {
+                sessionStorage.removeItem('pali_connected');
+            }
+        } catch (err) {
+            console.warn('Auto-reconnect failed:', err);
+            sessionStorage.removeItem('pali_connected');
+        }
+    }
+
+    function setupListeners(ethereum) {
+        if (ethereum.on) {
+            ethereum.on('chainChanged', handleChainChanged);
+            ethereum.on('accountsChanged', handleAccountsChanged);
+        }
+    }
+
+    function removeListeners() {
+        const ethereum = window['ethereum'];
+        if (ethereum?.removeListener) {
+            ethereum.removeListener('chainChanged', handleChainChanged);
+            ethereum.removeListener('accountsChanged', handleAccountsChanged);
+        }
+    }
+
+    async function changeTab(id) {
+        if (!connected && id !== 'intro') return;
+        activeTab = id;
+        await tick();
+        
+        const win = /** @type {any} */ (window);
+        if (win.anime) {
+            win.anime({
+                targets: '.content-glass',
+                scale: [0.98, 1],
+                opacity: [0, 1],
+                easing: 'easeOutQuart',
+                duration: 600
+            });
+        }
+    }
+
+    async function connectWallet() {
+        error = ''; loading = true;
+        try {
+            const ethereum = window['ethereum'];
+            if (!ethereum) { error = 'Pali Wallet no detectada.'; return; }
+            
+            await ethereum.request({ 
+                method: 'wallet_requestPermissions', 
+                params: [{ eth_accounts: {} }] 
+            });
+
+            const accounts = await ethereum.request({ method: 'eth_requestAccounts' });
+            if (!accounts || accounts.length === 0) throw new Error('No se seleccionó ninguna cuenta.');
+
+            provider = new ethers.BrowserProvider(ethereum);
+            signer = await provider.getSigner();
+            address = await signer.getAddress();
+            const rawBalance = await provider.getBalance(address);
+            balance = ethers.formatEther(rawBalance);
+
+            const network = await provider.getNetwork();
+            chainId = network.chainId.toString();
+
+            setupListeners(ethereum);
+            sessionStorage.setItem('pali_connected', 'true');
+
+            connected = true;
+            changeTab('wallet');
+        } catch (err) {
+            error = err.message || 'Error al conectar la wallet';
+            console.error(err);
+        } finally {
+            loading = false;
+        }
+    }
+
+    async function refreshBalance() {
+        if (!address || !provider) return;
+        try {
+            const rawBalance = await provider.getBalance(address);
+            balance = ethers.formatEther(rawBalance);
+        } catch (err) {
+            console.error('Error refreshing balance:', err);
+        }
+    }
+
+    async function handleChainChanged(_chainHex) {
+        try {
+            const ethereum = window['ethereum'];
+            if (!ethereum) return;
+
+            provider = new ethers.BrowserProvider(ethereum);
+            signer = await provider.getSigner();
+            address = await signer.getAddress();
+
+            const network = await provider.getNetwork();
+            chainId = network.chainId.toString();
+
+            await refreshBalance();
+        } catch (err) {
+            console.error('Error handling chain change:', err);
+        }
+    }
+
+    async function handleAccountsChanged(accounts) {
+        if (!accounts || accounts.length === 0) {
+            disconnect();
+            return;
+        }
+        try {
+            const ethereum = window['ethereum'];
+            provider = new ethers.BrowserProvider(ethereum);
+            signer = await provider.getSigner();
+            address = await signer.getAddress();
+            await refreshBalance();
+        } catch (err) {
+            console.error('Error handling account change:', err);
+        }
+    }
+
+    function disconnect() {
+        removeListeners();
+        address = ''; 
+        balance = '0'; 
+        chainId = ''; 
+        connected = false;
+        provider = null; 
+        signer = null;
+        history = [];
+        sessionStorage.removeItem('pali_connected');
+        changeTab('intro');
+    }
+
+    function shortAddress(addr) {
+        return addr ? addr.slice(0, 6) + '...' + addr.slice(-4) : '';
+    }
 </script>
 
-<div class="bg">
-  <div class="card">
-
-    <div class="header">
-      <div class="brand">
-        <div class="logo-circle" aria-hidden="true">
-          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="rgba(235, 237, 242, 0.92)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="2" y="5" width="20" height="14" rx="2"/>
-            <path d="M16 12h.01"/>
-            <path d="M2 10h20"/>
-          </svg>
-        </div>
-        <div class="brand-text">
-          <h1>Pali Wallet</h1>
-          <p class="subtitle">Conecta tu wallet y gestiona tus activos en la blockchain</p>
-        </div>
-      </div>
-
-      {#if connected}
-        <div class="connected-badge">
-          <span class="dot"></span>
-          Conectado
-        </div>
-      {/if}
-    </div>
-
-    {#if !connected}
-      <!-- PANTALLA LOGIN -->
-      <div class="divider"></div>
-
-      <div class="trust-row appear appear-1">
-        <div class="trust-item">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="rgba(207, 210, 218, 0.9)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
-          </svg>
-          <span>Seguro</span>
-        </div>
-        <div class="trust-item">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="rgba(207, 210, 218, 0.9)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="10"/>
-            <path d="M12 6v6l4 2"/>
-          </svg>
-          <span>Rápido</span>
-        </div>
-        <div class="trust-item">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="rgba(207, 210, 218, 0.9)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="10"/>
-            <line x1="2" y1="12" x2="22" y2="12"/>
-            <path d="M12 2a15.3 15.3 0 010 20M12 2a15.3 15.3 0 000 20"/>
-          </svg>
-          <span>ethers</span>
-        </div>
-        <div class="trust-item">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="rgba(207, 210, 218, 0.9)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="3" y="11" width="18" height="11" rx="2"/>
-            <path d="M7 11V7a5 5 0 0110 0v4"/>
-          </svg>
-          <span>Privado</span>
-        </div>
-      </div>
-
-      <button class="btn-connect appear appear-2" on:click={connectWallet} disabled={loading}>
-        {#if loading}
-          <span class="spinner"></span>
-          <span>Conectando...</span>
-        {:else}
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M15 3h4a2 2 0 012 2v14a2 2 0 01-2 2h-4"/>
-            <polyline points="10 17 15 12 10 7"/>
-            <line x1="15" y1="12" x2="3" y2="12"/>
-          </svg>
-          <span>Iniciar sesión con Pali Wallet</span>
-        {/if}
-      </button>
-
-    {:else}
-      <!-- PANTALLA CONECTADO -->
-      <div class="dash-grid">
-        <div class="dash-balance appear appear-1">
-          <div class="balance-card">
-            <div class="bc-shine"></div>
-            <div class="bc-shine2"></div>
-            <div class="bc-top">
-              <div class="bc-icon">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="rgba(235, 237, 242, 0.82)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <line x1="12" y1="1" x2="12" y2="23"/>
-                  <path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/>
+<div class="app-container bg-grid">
+    <aside class="sidebar">
+        <div class="sidebar-brand">
+            <div class="logo-circle">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="2" y="5" width="20" height="14" rx="2"/>
+                    <path d="M16 12h.01"/><path d="M2 10h20"/>
                 </svg>
-              </div>
-              <span class="bc-label">Saldo disponible</span>
-            </div>
-            <p class="bc-amount">{parseFloat(balance).toFixed(4)}</p>
-            <p class="bc-sym">SYS · Syscoin Network</p>
-            <div class="bc-footer">
-              <div class="bc-dots">
-                <span></span><span></span><span></span><span></span>
-                <span></span><span></span><span></span><span></span>
-              </div>
-              <span class="bc-last4">{address.slice(-4).toUpperCase()}</span>
-            </div>
-          </div>
-        </div>
-
-        <div class="dash-kpi appear appear-2">
-          <div class="info-box">
-            <div class="info-icon-wrap">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="rgba(207, 210, 218, 0.9)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/>
-                <circle cx="12" cy="7" r="4"/>
-              </svg>
             </div>
             <div>
-              <p class="info-label">Dirección</p>
-              <p class="info-value mono">{shortAddress(address)}</p>
+                <h2>Fernando VIP</h2>
+                <span>Innovacion Blockchain</span>
             </div>
-          </div>
         </div>
 
-        <div class="dash-kpi appear appear-3">
-          <div class="info-box">
-            <div class="info-icon-wrap">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="rgba(207, 210, 218, 0.9)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="2" y="5" width="20" height="14" rx="2"/>
-                <path d="M2 10h20"/>
-              </svg>
-            </div>
-            <div>
-              <p class="info-label">Saldo</p>
-              <p class="info-value mono">{parseFloat(balance).toFixed(6)} SYS</p>
-            </div>
-          </div>
+        <div class="sidebar-section">
+            <div class="sidebar-title">Menu principal</div>
+            <nav class="sidebar-nav">
+                {#each tabs as tab}
+                    <button 
+                        class="nav-item {activeTab === tab.id ? 'active' : ''}"
+                        on:click={() => changeTab(tab.id)}
+                        disabled={!connected && tab.id !== 'intro'}
+                    >
+                        <span class="nav-icon">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d={tab.icon}/>
+                            </svg>
+                        </span>
+                        <span class="nav-label">{tab.label}</span>
+                        {#if tab.id === activeTab}
+                            <div class="active-indicator"></div>
+                        {/if}
+                    </button>
+                {/each}
+            </nav>
         </div>
 
-        <div class="dash-wide appear appear-4">
-          <button class="address-box" on:click={copyAddress}>
-            <div class="addr-left">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="rgba(235, 237, 242, 0.55)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/>
-                <path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/>
-              </svg>
-              <div>
-                <p class="info-label">Address completo</p>
-                <p class="addr-text mono">{address}</p>
-              </div>
+        <div class="sidebar-footer">
+            {#if connected}
+                <div class="user-pill">
+                    <div class="user-avatar">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2.5"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                    </div>
+                    <div class="user-info">
+                        <span class="addr">{shortAddress(address)}</span>
+                        <span class="net-status"><span class="dot"></span> Online</span>
+                    </div>
+                    <button class="btn-disconnect-icon" on:click={disconnect} title="Desconectar">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>
+                        </svg>
+                    </button>
+                </div>
+            {:else}
+                <button class="btn-connect-full" on:click={connectWallet} disabled={loading}>
+                    {#if loading}
+                        <span class="spinner"></span>
+                    {:else}
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
+                        Conectar Wallet
+                    {/if}
+                </button>
+            {/if}
+        </div>
+    </aside>
+
+    <main class="main-content">
+        <header class="topbar">
+            <div class="topbar-title">
+                <h1>{tabs.find(t => t.id === activeTab)?.label}</h1>
+                <p class="breadcrumbs">System / <span>{tabs.find(t => t.id === activeTab)?.label}</span></p>
             </div>
-            <div class="copy-icon">
-              {#if copied}
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--good)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                  <polyline points="20 6 9 17 4 12"/>
-                </svg>
-              {:else}
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="rgba(235, 237, 242, 0.55)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <rect x="9" y="9" width="13" height="13" rx="2"/>
-                  <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
-                </svg>
-              {/if}
+            
+            <div class="topbar-actions">
+                {#if error}
+                    <div class="error-badge">⚠️ Error conexión</div>
+                {/if}
+                <div class="time-badge">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                    Sesión Activa
+                </div>
             </div>
-          </button>
+        </header>
+
+        <div class="content-wrapper">
+            <div class="content-glass">
+                {#if activeTab === 'intro'}
+                    <Intro />
+                {:else if activeTab === 'wallet'}
+                    <Wallet {balance} {address} {chainId} {history} />
+                {:else if activeTab === 'transfer'}
+                    <Transfer 
+                        {signer} 
+                        {connected} 
+                        {balance}
+                        {chainId}
+                        explorerBase={getExplorerBase(chainId)}
+                        onTransactionConfirmed={refreshBalance} 
+                        onNewTransaction={recordTransaction}
+                    />
+                {:else if activeTab === 'networks'}
+                    <Networks {chainId} />
+                {/if}
+            </div>
         </div>
 
-        <div class="dash-network appear appear-5">
-          <div class="network-box">
-            <div class="network-dot"></div>
-            <div>
-              <p class="info-label">Red activa</p>
-              <p class="info-value">{chainId ? `Chain ID ${chainId}` : 'Desconocida'}</p>
+        <footer class="app-footer">
+            <div class="footer-left">
+                <strong>Fernando VIP Dashboard</strong>
+                <span>Proyecto de Innovacion Blockchain</span>
             </div>
-            <div class="network-badge">{chainId ? (chainId === '5700' ? 'Syscoin' : 'Otra') : 'N/A'}</div>
-          </div>
-        </div>
-
-        <div class="dash-action appear appear-6">
-          <button class="btn-disconnect" on:click={disconnect}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/>
-              <polyline points="16 17 21 12 16 7"/>
-              <line x1="21" y1="12" x2="9" y2="12"/>
-            </svg>
-            Desconectar
-          </button>
-        </div>
-      </div>
-    {/if}
-
-    {#if error}
-      <div class="error-box">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="12" cy="12" r="10"/>
-          <line x1="12" y1="8" x2="12" y2="12"/>
-          <line x1="12" y1="16" x2="12.01" y2="16"/>
-        </svg>
-        {error}
-      </div>
-    {/if}
-
-  </div>
+            <div class="footer-right">
+                <span>Version 1.0</span>
+                <span>UI Profesional + Multi Red</span>
+                <span>Actividad completada</span>
+            </div>
+        </footer>
+    </main>
 </div>
 
 <style>
   :global(:root) {
-    --bg: #14181f;
-    --panel: rgba(18, 22, 29, 0.78);
-    --panel-solid: #12161d;
-    --panel-2: rgba(20, 24, 32, 0.62);
-    --border: rgba(233, 234, 238, 0.10);
-    --border-2: rgba(233, 234, 238, 0.16);
-    --text: rgba(235, 237, 242, 0.94);
-    --muted: rgba(235, 237, 242, 0.62);
-    --muted-2: rgba(235, 237, 242, 0.42);
-
-    --platinum: #f0f2f6;
-    --platinum-2: rgba(240, 242, 246, 0.78);
-    --steel: rgba(221, 225, 234, 0.16);
-    --steel-2: rgba(221, 225, 234, 0.10);
-
-    --good: #3ddc97;
-    --bad: #ff6b6b;
-
-    --shadow: 0 26px 90px rgba(0, 0, 0, 0.55);
-    --shadow-soft: 0 16px 40px rgba(0, 0, 0, 0.35);
+    --bg-dark: #0a0c10;
+    --sidebar-bg: rgba(13, 16, 21, 0.95);
+    --panel: rgba(18, 22, 28, 0.6);
+    --border: rgba(255, 255, 255, 0.05);
+    --border-2: rgba(255, 255, 255, 0.1);
+    
+    --text: #ffffff;
+    --muted: #8b949e;
+    
+    --accent: #00d08e;
+    --accent-2: #4b5563;
+    --accent-glow: rgba(0, 208, 142, 0.18);
+    
+    --platinum: #f0f6fc;
+    --good: #00ffa3;
+    --bad: #ff5555;
+    --muted-2: #636c76;
+    --shadow-soft: 0 4px 24px rgba(0,0,0,0.3);
   }
 
-  :global(body) {
-    margin: 0;
-    font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    background: var(--bg);
+    :global(body) {
+        margin: 0; padding: 0;
+        font-family: 'Space Grotesk', 'IBM Plex Sans', system-ui, sans-serif;
+    background: var(--bg-dark);
     color: var(--text);
+    overflow: hidden;
   }
 
-  .bg {
-    min-height: 100vh;
-    background: var(--bg);
+  .app-container {
     display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 1rem;
+    height: 100vh;
+    width: 100vw;
     position: relative;
     overflow: hidden;
   }
 
-  .bg::before {
-    content: '';
-    position: absolute;
-    inset: -2px;
-    pointer-events: none;
-    opacity: 0.35;
-    background:
-      repeating-linear-gradient(90deg, rgba(221,225,234,0.06) 0 1px, transparent 1px 44px),
-      repeating-linear-gradient(0deg, rgba(221,225,234,0.04) 0 1px, transparent 1px 44px);
-    transform: translateZ(0);
-    animation: gridDrift 18s linear infinite;
+  .bg-grid::before {
+    content: ''; position: absolute; inset: 0; pointer-events: none; opacity: 0.15; z-index: 0;
+    background-image: 
+        radial-gradient(var(--accent) 0.5px, transparent 0.5px);
+    background-size: 30px 30px;
   }
 
-  .bg::after {
-    content: '';
-    position: absolute;
-    inset: 0;
-    pointer-events: none;
-    background:
-      radial-gradient(1200px 700px at 50% 0%, rgba(240,242,246,0.22), transparent 58%),
-      radial-gradient(900px 700px at 50% 120%, rgba(0,0,0,0.42), transparent 52%);
-    opacity: 1;
+    .sidebar {
+        width: 290px;
+        background: var(--sidebar-bg);
+    backdrop-filter: blur(30px);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    z-index: 10;
+    box-shadow: 10px 0 30px rgba(0,0,0,0.5);
   }
 
-  .card {
-    position: relative;
-    z-index: 1;
-    background: var(--panel);
-    backdrop-filter: blur(18px);
-    border: 1px solid rgba(221, 225, 234, 0.12);
-    border-radius: 28px;
-    padding: 2.5rem 2.75rem;
-    width: 100%;
-    max-width: 780px;
-    text-align: center;
-    color: var(--text);
-    box-shadow: var(--shadow);
-    animation: popIn 560ms cubic-bezier(.2,.9,.2,1) both;
-  }
-
-  .card::before {
-    content: '';
-    position: absolute;
-    inset: 10px;
-    border-radius: 22px;
-    border: 1px solid rgba(221, 225, 234, 0.08);
-    pointer-events: none;
-  }
-
-  .header {
+    .sidebar-brand {
+        padding: 2.25rem 1.6rem 1.6rem;
     display: flex;
     align-items: center;
-    justify-content: space-between;
     gap: 1rem;
-    margin-bottom: 1.25rem;
   }
 
-  .brand {
-    display: flex;
-    align-items: center;
-    gap: 0.9rem;
-    min-width: 0;
-  }
+    .sidebar-title {
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        color: var(--muted-2);
+        padding: 0 1.6rem 0.75rem;
+        font-weight: 700;
+    }
 
-  .brand-text { text-align: left; min-width: 0; }
+    .sidebar-section {
+        padding-bottom: 1rem;
+        border-bottom: 1px solid var(--border);
+    }
 
-  .logo-circle {
-    width: 60px;
-    height: 60px;
-    border-radius: 50%;
-    background: rgba(240, 242, 246, 0.12);
-    border: 1px solid rgba(240, 242, 246, 0.22);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    margin: 0 auto;
-    box-shadow: none;
-    flex: 0 0 auto;
-  }
-
-  h1 {
-    font-size: 1.35rem;
-    font-weight: 800;
-    margin: 0 0 0.15rem;
-    color: var(--platinum);
-    letter-spacing: -0.5px;
-  }
-
-  .subtitle {
-    font-size: 0.88rem;
-    color: var(--muted);
-    margin: 0;
-    line-height: 1.6;
-  }
-
-  .divider {
-    height: 1px;
-    background: var(--border);
-    margin-bottom: 1.5rem;
-  }
-
-  /* Trust row */
-  .trust-row {
-    display: flex;
-    justify-content: space-between;
-    gap: 0.75rem;
-    margin-bottom: 1.75rem;
-  }
-
-  .trust-item {
-    flex: 1;
-    display: grid;
-    grid-template-columns: 20px 1fr;
-    align-items: center;
-    gap: 0.55rem;
-    padding: 0.75rem 0.85rem;
-    border-radius: 14px;
-    background: rgba(240, 242, 246, 0.06);
-    border: 1px solid rgba(240, 242, 246, 0.10);
-    color: var(--muted);
-    font-size: 0.72rem;
-    letter-spacing: 0.03em;
-  }
-
-  .trust-item span { justify-self: start; }
-
-  /* Botón conectar */
-  .btn-connect {
-    width: 100%;
-    padding: 0.95rem 1.5rem;
-    background: rgba(240, 242, 246, 0.10);
-    color: var(--platinum);
-    border: 1px solid rgba(240, 242, 246, 0.22);
-    border-radius: 14px;
-    font-size: 0.95rem;
-    font-weight: 700;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.6rem;
-    transition: transform 0.15s, background 0.2s, border-color 0.2s, box-shadow 0.2s;
-    box-shadow: none;
-    letter-spacing: 0.01em;
-  }
-
-  .btn-connect:hover:not(:disabled) {
-    transform: translateY(-2px);
-    background: rgba(240, 242, 246, 0.14);
-    border-color: rgba(240, 242, 246, 0.32);
-    box-shadow: 0 12px 34px rgba(0,0,0,0.28);
-  }
-
-  .btn-connect:disabled { opacity: 0.5; cursor: not-allowed; }
-
-  /* Badge conectado */
-  .connected-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.4rem;
-    background: rgba(61, 220, 151, 0.10);
-    border: 1px solid rgba(61, 220, 151, 0.22);
-    border-radius: 20px;
-    padding: 0.3rem 0.85rem;
-    font-size: 0.75rem;
-    color: var(--good);
-    font-weight: 600;
-    letter-spacing: 0.04em;
-    margin: 0;
-    animation: fadeUp 520ms cubic-bezier(.2,.9,.2,1) both;
-  }
-
-  .dot {
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: var(--good);
-    box-shadow: none;
-    animation: pulse 2s infinite;
-  }
-
-  @keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.4; }
-  }
-
-  /* Balance card */
-  .balance-card {
-    background: rgba(240, 242, 246, 0.06);
-    border: 1px solid rgba(240, 242, 246, 0.16);
-    border-radius: 20px;
-    padding: 1.75rem;
-    flex: 1;
-    position: relative;
-    overflow: hidden;
-    text-align: left;
-    box-shadow: var(--shadow-soft);
-    transform: translateZ(0);
-    animation: cardFloat 8.5s ease-in-out infinite;
-  }
-
-  .bc-shine {
-    display: block;
-    position: absolute;
-    inset: -2px;
-    border-radius: 20px;
-    pointer-events: none;
-    background:
-      repeating-linear-gradient(135deg, rgba(240,242,246,0.10) 0 1px, transparent 1px 12px);
-    opacity: 0.55;
-    mask: linear-gradient(to bottom, rgba(0,0,0,0.75), rgba(0,0,0,0.15));
-    animation: scan 7.5s linear infinite;
-  }
-
-  .bc-shine2 {
-    display: block;
-    position: absolute;
-    inset: 10px;
-    border-radius: 14px;
-    border: 1px solid rgba(221, 225, 234, 0.10);
-    pointer-events: none;
-  }
-
-  .balance-card::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    border-radius: 20px;
-    pointer-events: none;
-    background:
-      radial-gradient(640px 260px at 22% 8%, rgba(240,242,246,0.18), transparent 58%),
-      radial-gradient(560px 280px at 92% 86%, rgba(240,242,246,0.10), transparent 62%);
-    opacity: 0.9;
-  }
-
-  .balance-card::after {
-    content: '';
-    position: absolute;
-    inset: 0;
-    border-radius: 20px;
-    pointer-events: none;
-    box-shadow: inset 0 1px 0 rgba(240,242,246,0.18), inset 0 -1px 0 rgba(0,0,0,0.35);
-  }
-
-  .bc-top {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    margin-bottom: 1rem;
-  }
-
-  .bc-icon {
-    width: 32px; height: 32px;
-    background: rgba(240, 242, 246, 0.10);
-    border: 1px solid rgba(240, 242, 246, 0.16);
-    border-radius: 8px;
-    display: flex; align-items: center; justify-content: center;
-  }
-
-  .bc-label {
-    font-size: 0.75rem;
-    color: var(--muted);
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-  }
-
-  .bc-amount {
-    margin: 0;
-    font-size: 3rem;
-    font-weight: 800;
-    color: var(--platinum);
-    letter-spacing: -1px;
-    line-height: 1;
-  }
-
-  .bc-sym {
-    margin: 0.3rem 0 1.25rem;
-    font-size: 0.8rem;
-    color: var(--muted);
-    font-weight: 500;
-  }
-
-  .bc-footer {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-
-  .bc-dots { display: flex; gap: 5px; }
-  .bc-dots span {
-    width: 6px; height: 6px;
-    border-radius: 50%;
-    background: rgba(233, 234, 238, 0.22);
-  }
-
-  .bc-last4 {
-    font-family: monospace;
-    font-size: 0.85rem;
-    color: var(--muted);
-    font-weight: 600;
-    letter-spacing: 0.1em;
-  }
-
-
-  /* Info grid */
-  .info-box {
-    background: rgba(240, 242, 246, 0.06);
-    border: 1px solid var(--border);
-    border-radius: 14px;
-    padding: 1rem;
-    display: flex;
-    align-items: center;
-    gap: 0.65rem;
-    text-align: left;
-    transition: background 0.2s, border-color 0.2s;
-  }
-
-  .info-box:hover {
-    background: rgba(240, 242, 246, 0.09);
-    border-color: var(--border-2);
-  }
-
-  .info-icon-wrap {
-    width: 34px; height: 34px;
-    background: rgba(240, 242, 246, 0.08);
-    border: 1px solid rgba(240, 242, 246, 0.12);
-    border-radius: 9px;
-    display: flex; align-items: center; justify-content: center;
-    flex-shrink: 0;
-  }
-
-  .info-label {
-    font-size: 0.68rem;
-    color: var(--muted-2);
-    margin: 0 0 3px;
-    text-transform: uppercase;
-    letter-spacing: 0.07em;
-  }
-
-  .info-value {
-    font-size: 1rem;
-    color: var(--text);
-    margin: 0;
-    font-weight: 700;
-  }
-
-  /* Network box */
-  .network-box {
-    background: rgba(240, 242, 246, 0.06);
-    border: 1px solid var(--border);
-    border-radius: 14px;
-    padding: 1rem;
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-  }
-
-  .network-dot {
-    width: 10px; height: 10px;
-    border-radius: 50%;
-    background: var(--good);
-    box-shadow: none;
-    flex-shrink: 0;
-    animation: pulse 2s infinite;
-  }
-
-  .network-badge {
-    margin-left: auto;
-    background: rgba(61, 220, 151, 0.10);
-    border: 1px solid rgba(61, 220, 151, 0.18);
-    border-radius: 20px;
-    padding: 0.2rem 0.65rem;
-    font-size: 0.7rem;
-    color: var(--good);
-    font-weight: 600;
-    letter-spacing: 0.05em;
-  }
-
-  /* Address box */
-  .address-box {
-    width: 100%;
-    background: rgba(240, 242, 246, 0.06);
-    border: 1px solid var(--border);
-    border-radius: 14px;
-    padding: 0.9rem 1rem;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.75rem;
-    cursor: pointer;
-    transition: background 0.2s, border-color 0.2s;
-    text-align: left;
-    color: var(--text);
-    box-sizing: border-box;
-  }
-
-  .address-box:hover {
-    background: rgba(240, 242, 246, 0.09);
-    border-color: rgba(240, 242, 246, 0.22);
-  }
-
-  .dash-grid {
-    display: grid;
-    grid-template-columns: 1.2fr 1fr;
-    gap: 0.9rem;
-    text-align: left;
-  }
-
-  .dash-balance { grid-column: 1 / 2; grid-row: 1 / span 3; }
-  .dash-kpi { grid-column: 2 / 3; }
-  .dash-wide { grid-column: 1 / -1; }
-  .dash-network { grid-column: 1 / 2; }
-  .dash-action { grid-column: 2 / 3; }
-
-  @media (max-width: 820px) {
-    .dash-grid { grid-template-columns: 1fr; }
-    .dash-balance, .dash-kpi, .dash-wide, .dash-network, .dash-action { grid-column: 1 / -1; grid-row: auto; }
-  }
-
-  .appear {
-    animation: fadeUp 520ms cubic-bezier(.2,.9,.2,1) both;
-    will-change: transform, opacity;
-  }
-  .appear-1 { animation-delay: 60ms; }
-  .appear-2 { animation-delay: 120ms; }
-  .appear-3 { animation-delay: 180ms; }
-  .appear-4 { animation-delay: 240ms; }
-  .appear-5 { animation-delay: 300ms; }
-  .appear-6 { animation-delay: 360ms; }
-
-  .addr-left {
-    display: flex;
-    align-items: flex-start;
-    gap: 0.6rem;
-    flex: 1;
-    min-width: 0;
-  }
-
-  .addr-left svg { flex-shrink: 0; margin-top: 2px; }
-
-  .addr-text {
-    font-size: 0.68rem;
-    color: var(--muted);
-    word-break: break-all;
-    margin: 0;
-    line-height: 1.5;
-  }
-
-  .copy-icon { flex-shrink: 0; }
-
-  /* Botón desconectar */
-  .btn-disconnect {
-    width: 100%;
-    padding: 0.8rem;
-    background: transparent;
-    color: var(--bad);
-    border: 1px solid rgba(255, 107, 107, 0.35);
-    border-radius: 14px;
-    font-size: 0.88rem;
-    font-weight: 600;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.5rem;
-    transition: background 0.2s, border-color 0.2s;
-    letter-spacing: 0.01em;
-  }
-
-  .btn-disconnect:hover {
-    background: rgba(255, 107, 107, 0.08);
-    border-color: rgba(255, 107, 107, 0.55);
-  }
-
-  /* Error */
-  .error-box {
-    margin-top: 1rem;
-    background: rgba(255, 107, 107, 0.10);
-    border: 1px solid rgba(255, 107, 107, 0.22);
+    .logo-circle {
+        width: 46px; height: 46px;
+        background: linear-gradient(135deg, var(--accent), var(--accent-2));
     border-radius: 12px;
-    padding: 0.75rem 1rem;
-    color: rgba(255, 107, 107, 0.92);
-    font-size: 0.82rem;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 0 20px var(--accent-glow);
+  }
+
+  .sidebar-brand h2 { margin: 0; font-size: 1.3rem; font-weight: 800; color: #fff; font-family: 'Outfit', sans-serif; }
+  .sidebar-brand span { font-size: 0.7rem; color: var(--accent); font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; opacity: 0.8; }
+
+    .sidebar-nav {
+        flex: 1;
+        padding: 0 1rem 1rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.55rem;
+    }
+
+    .nav-item {
+        position: relative;
+        display: flex; align-items: center; gap: 0.85rem;
+        width: 100%; padding: 0.75rem 0.9rem;
+        background: transparent; border: 1px solid transparent; border-radius: 12px;
+        color: var(--muted); font-size: 0.9rem; font-weight: 600;
+        cursor: pointer; transition: all 0.3s; text-align: left;
+    }
+
+  .nav-item:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.03);
+    color: #fff;
+  }
+
+    .nav-item.active {
+        color: var(--text);
+        background: rgba(0, 255, 163, 0.08);
+        border-color: rgba(0, 255, 163, 0.2);
+        box-shadow: 0 0 20px rgba(0, 255, 163, 0.08);
+    }
+
+    .nav-icon {
+        width: 34px;
+        height: 34px;
+        border-radius: 10px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(240, 242, 246, 0.06);
+        border: 1px solid rgba(240, 242, 246, 0.08);
+        flex-shrink: 0;
+    }
+
+    .nav-label {
+        font-weight: 600;
+    }
+
+  .nav-item:disabled { opacity: 0.2; cursor: not-allowed; }
+
+  .active-indicator {
+    position: absolute; left: 0; top: 25%; height: 50%; width: 3px;
+    background: var(--accent); border-radius: 0 4px 4px 0;
+    box-shadow: 0 0 15px var(--accent);
+  }
+
+  .sidebar-footer {
+        margin-top: auto;
+        padding: 2.2rem 1.5rem 2.4rem;
+    border-top: 1px solid var(--border);
+  }
+
+  .btn-connect-full {
+    width: 100%; padding: 0.9rem;
+    background: #fff; border: none;
+    color: #000; border-radius: 12px;
+    font-weight: 800; font-size: 0.9rem;
+    display: flex; align-items: center; justify-content: center; gap: 0.5rem;
+    cursor: pointer; transition: all 0.2s;
+  }
+
+  .btn-connect-full:hover:not(:disabled) {
+    background: var(--accent);
+    box-shadow: 0 0 20px var(--accent-glow);
+    transform: translateY(-2px);
+  }
+
+  .user-pill {
+    display: flex; align-items: center; gap: 0.8rem;
+    background: rgba(255,255,255,0.03); border: 1px solid var(--border);
+    padding: 0.8rem; border-radius: 16px;
+  }
+
+  .user-avatar {
+    width: 36px; height: 36px; border-radius: 10px;
+    background: rgba(0, 255, 163, 0.1); border: 1px solid rgba(0, 255, 163, 0.2);
+    display: flex; align-items: center; justify-content: center;
+  }
+
+  .user-info { flex: 1; display: flex; flex-direction: column; gap: 0.15rem; overflow: hidden; }
+  .user-info .addr { font-family: 'JetBrains Mono', monospace; font-size: 0.75rem; font-weight: 600; color: var(--muted); }
+  .user-info .net-status { font-size: 0.65rem; color: var(--muted); display: flex; align-items: center; gap: 0.3rem; font-weight: 600; text-transform: uppercase; }
+
+  .user-info .net-status { font-size: 0.65rem; color: var(--muted); display: flex; align-items: center; gap: 0.3rem; font-weight: 600; text-transform: uppercase; }
+  
+  .dot { width: 6px; height: 6px; background: var(--accent); border-radius: 50%; box-shadow: 0 0 10px var(--accent); animation: pulse 2s infinite; }
+
+  .btn-disconnect-icon {
+    background: rgba(255,255,255,0.05); border: 1px solid var(--border);
+    color: var(--bad); width: 34px; height: 34px; border-radius: 10px;
+    display: flex; align-items: center; justify-content: center; cursor: pointer;
+    transition: all 0.2s;
+  }
+  .btn-disconnect-icon:hover { background: var(--bad); color: #fff; }
+
+  .main-content {
+    flex: 1;
     display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    text-align: left;
+    flex-direction: column;
+    position: relative;
+    background: radial-gradient(circle at 50% -20%, #161b22, transparent);
   }
 
-  .mono { font-family: 'Courier New', monospace; }
-
-  .spinner {
-    width: 16px; height: 16px;
-    border: 2px solid rgba(233, 234, 238, 0.22);
-    border-top-color: var(--platinum);
-    border-radius: 50%;
-    animation: spin 0.7s linear infinite;
-    display: inline-block;
-    flex-shrink: 0;
+  .topbar {
+    height: 90px; padding: 0 3.5rem;
+    display: flex; align-items: center; justify-content: space-between;
+    border-bottom: 1px solid var(--border);
   }
 
+  .topbar-title h1 { margin: 0; font-size: 1.8rem; color: #fff; font-weight: 800; letter-spacing: -0.03em; font-family: 'Outfit', sans-serif; }
+  .breadcrumbs { margin: 0.2rem 0 0; font-size: 0.8rem; color: var(--muted); font-weight: 500; }
+  .breadcrumbs span { color: var(--accent); }
+
+  .topbar-actions { display: flex; align-items: center; gap: 1.2rem; }
+  
+  .error-badge { background: rgba(255,85,85,0.1); border: 1px solid rgba(255,85,85,0.2); color: var(--bad); padding: 0.5rem 1rem; border-radius: 10px; font-size: 0.8rem; font-weight: 700; }
+  
+  .time-badge {
+    display: flex; align-items: center; gap: 0.6rem;
+    background: rgba(255,255,255,0.03); border: 1px solid var(--border);
+    padding: 0.5rem 1rem; border-radius: 10px;
+    font-size: 0.8rem; color: var(--muted); font-weight: 600;
+  }
+
+  .content-wrapper {
+    flex: 1;
+    padding: 2.5rem 3.5rem;
+    overflow-y: auto;
+  }
+
+  .content-glass {
+    background: var(--panel);
+    backdrop-filter: blur(40px);
+    border: 1px solid var(--border-2);
+    border-radius: 32px;
+    padding: 3rem;
+    min-height: calc(100% - 3rem);
+    box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+    position: relative;
+  }
+
+    .app-footer {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 1.2rem 3.5rem 1.8rem;
+        color: var(--muted);
+        font-size: 0.8rem;
+    }
+
+    .footer-left {
+        display: flex;
+        flex-direction: column;
+        gap: 0.2rem;
+    }
+
+    .footer-left strong {
+        color: var(--platinum);
+        font-size: 0.95rem;
+    }
+
+    .footer-right {
+        display: flex;
+        gap: 1.2rem;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+    }
+
+  .spinner { width: 14px; height: 14px; border: 2px solid transparent; border-top-color: currentColor; border-radius: 50%; animation: spin 0.7s linear infinite; }
+
+  @keyframes pulse { 0%, 100% { opacity:1; } 50% { opacity:0.4; } }
   @keyframes spin { to { transform: rotate(360deg); } }
 
-  @keyframes cardFloat {
-    0%, 100% { transform: translateY(0px); }
-    50% { transform: translateY(-6px); }
-  }
-
-  @keyframes scan {
-    0% { transform: translateX(-22px) translateY(-10px); opacity: 0.45; }
-    50% { opacity: 0.62; }
-    100% { transform: translateX(22px) translateY(10px); opacity: 0.45; }
-  }
-
-  @keyframes gridDrift {
-    0% { transform: translate3d(0, 0, 0); }
-    100% { transform: translate3d(-44px, -44px, 0); }
-  }
-
-  @keyframes fadeUp {
-    from { opacity: 0; transform: translateY(10px); }
-    to { opacity: 1; transform: translateY(0); }
-  }
-
-  @keyframes popIn {
-    from { opacity: 0; transform: translateY(14px) scale(0.985); }
-    to { opacity: 1; transform: translateY(0) scale(1); }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .balance-card, .bg::before { animation: none !important; }
-    .btn-connect, .info-box, .address-box { transition: none !important; }
-    .appear, .card, .connected-badge { animation: none !important; }
+  @media (max-width: 1000px) {
+    .sidebar { width: 80px; }
+        .sidebar h2, .sidebar-brand span, .sidebar-title, .nav-label, .sidebar-footer .user-info { display: none; }
+    .sidebar-brand, .sidebar-footer { justify-content: center; padding: 1.5rem 0.5rem; }
+    .nav-item { justify-content: center; padding: 1rem; }
+    .topbar { padding: 0 1.5rem; }
+    .content-wrapper { padding: 1.5rem; }
+        .app-footer { padding: 1rem 1.5rem 1.5rem; flex-direction: column; align-items: flex-start; gap: 0.6rem; }
   }
 </style>
