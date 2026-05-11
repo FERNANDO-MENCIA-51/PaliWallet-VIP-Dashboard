@@ -1,365 +1,365 @@
 <script>
+    import { createEventDispatcher, onMount } from 'svelte';
+    import { EVM_NETWORKS, UTXO_NETWORKS, buildAddChainParams, getNetworkName } from './config/networks.js';
+
     export let chainId = '';
 
+    const dispatch = createEventDispatcher();
+
     let error = '';
+    let status = '';
+    let selectedNetworkId = '57057';
+    let detectedChainId = '';
+    let busyNetworkId = '';
+    let busyUtxoId = '';
+    let activeUtxoNetworkId = '';
+    /** @type {any} */
+    let utxoAccount = null;
 
-    const networks = [
-        {
-            id: '570',
-            name: 'Rollux Mainnet',
-            type: 'EVM / L2',
-            chainHex: '0x23a',
-            rpc: 'https://rpc.rollux.com',
-            ticker: 'SYS',
-            explorer: 'https://explorer.rollux.com',
-            icon: '🔵'
-        },
-        {
-            id: '57000',
-            name: 'Rollux Testnet',
-            type: 'EVM / L2 Test',
-            chainHex: '0xdea8',
-            rpc: 'https://rpc-tanenbaum.rollux.com',
-            ticker: 'tSYS',
-            explorer: 'https://rollux.tanenbaum.io',
-            icon: '🧪'
-        },
-        {
-            id: '57',
-            name: 'Syscoin NEVM',
-            type: 'UTXO / EVM',
-            chainHex: '0x39',
-            rpc: 'https://rpc.syscoin.org',
-            ticker: 'SYS',
-            explorer: 'https://explorer.syscoin.org',
-            icon: '🟦'
-        },
-        {
-            id: '5700',
-            name: 'Syscoin Tanenbaum',
-            type: 'UTXO / EVM Test',
-            chainHex: '0x1644',
-            rpc: 'https://rpc.tanenbaum.io',
-            ticker: 'tSYS',
-            explorer: 'https://tanenbaum.io',
-            icon: '🔬'
-        },
-        {
-            id: '1',
-            name: 'Ethereum Mainnet',
-            type: 'EVM',
-            chainHex: '0x1',
-            rpc: 'https://eth.llamarpc.com',
-            ticker: 'ETH',
-            explorer: 'https://etherscan.io',
-            icon: '⟠'
-        },
-        {
-            id: '11155111',
-            name: 'Sepolia Testnet',
-            type: 'EVM Test',
-            chainHex: '0xaa36a7',
-            rpc: 'https://rpc.sepolia.org',
-            ticker: 'ETH',
-            explorer: 'https://sepolia.etherscan.io',
-            icon: '♦️'
-        },
-        {
-            id: '137',
-            name: 'Polygon PoS',
-            type: 'EVM / L2',
-            chainHex: '0x89',
-            rpc: 'https://polygon-rpc.com',
-            ticker: 'MATIC',
-            explorer: 'https://polygonscan.com',
-            icon: '🟣'
-        },
-        {
-            id: '56',
-            name: 'BNB Smart Chain',
-            type: 'EVM',
-            chainHex: '0x38',
-            rpc: 'https://bsc-dataseed.binance.org',
-            ticker: 'BNB',
-            explorer: 'https://bscscan.com',
-            icon: '🟡'
-        },
-        {
-            id: '43114',
-            name: 'Avalanche C-Chain',
-            type: 'EVM',
-            chainHex: '0xa86a',
-            rpc: 'https://api.avax.network/ext/bc/C/rpc',
-            ticker: 'AVAX',
-            explorer: 'https://snowtrace.io',
-            icon: '🔺'
-        }
-    ];
+    const utxoNetworks = UTXO_NETWORKS;
+    const evmNetworks = EVM_NETWORKS;
 
-    async function switchNetwork(net) {
-        error = '';
-        const ethereum = window['ethereum'];
-        if (!ethereum) {
-            error = 'Extensión Wallet no detectada.';
-            return;
+    $: selectedNetwork = evmNetworks.find((network) => network.id === selectedNetworkId) || evmNetworks[0];
+    $: activeChainId = chainId || detectedChainId;
+    $: activeNetwork = evmNetworks.find((network) => network.id === activeChainId);
+
+    onMount(() => {
+        detectActiveNetwork();
+        detectUtxoState();
+    });
+
+    function getPaliProvider() {
+        return /** @type {any} */(window).pali;
+    }
+
+    /** 
+     * @param {string} method 
+     * @param {string} [directName]
+     */
+    async function callPali(method, directName = '') {
+        const pali = getPaliProvider();
+        if (!pali) throw new Error('Pali Wallet no detectada.');
+
+        if (typeof pali.request === 'function') {
+            return pali.request({ method });
         }
+
+        if (directName && typeof pali[directName] === 'function') {
+            return pali[directName]();
+        }
+
+        throw new Error(`Metodo no disponible: ${method}`);
+    }
+
+    /** 
+     * @param {any} target 
+     * @param {any} network 
+     * @param {any} [sysState]
+     */
+    function matchesUtxoNetwork(target, network, sysState = {}) {
+        const label = `${network?.label || ''} ${network?.key || ''} ${network?.currency || ''} ${network?.url || ''} ${sysState?.blockExplorerURL || ''}`.toLowerCase();
+        if (target.id === 'bitcoin') return target.expectedLabels.some((word) => label.includes(word)) || sysState?.isBitcoinBased === true;
+        if (typeof sysState?.isTestnet === 'boolean') return sysState.isTestnet === target.isTestnet;
+        return target.expectedLabels.some((word) => label.includes(word));
+    }
+
+    async function detectUtxoState() {
+        const pali = getPaliProvider();
+        if (!pali) return;
 
         try {
+            const [state, network, account, balance] = await Promise.allSettled([
+                callPali('wallet_getSysProviderState'),
+                callPali('wallet_getNetwork', 'getNetwork'),
+                callPali('wallet_getAccount', 'getAccount'),
+                callPali('wallet_getBalance', 'getBalance')
+            ]);
+
+            const sysState = state.status === 'fulfilled' ? state.value : {};
+            const currentNetwork = network.status === 'fulfilled' ? network.value : {};
+            const currentAccount = account.status === 'fulfilled' ? account.value : null;
+            const currentBalance = balance.status === 'fulfilled' ? balance.value : null;
+
+            const matched = utxoNetworks.find((net) => matchesUtxoNetwork(net, currentNetwork, sysState));
+            activeUtxoNetworkId = matched?.id || '';
+            utxoAccount = currentAccount ? { ...currentAccount, balance: currentBalance, network: currentNetwork } : null;
+        } catch (err) {
+            console.warn('Error detectando estado UTXO:', err);
+        }
+    }
+
+    /** @param {any} net */
+    async function connectUtxoNetwork(net) {
+        error = ''; status = ''; busyUtxoId = net.id;
+        try {
+            const pali = getPaliProvider();
+            if (!pali) throw new Error('Pali Wallet no detectada.');
+            status = `Conectando ${net.name}...`;
+            if (typeof pali.request === 'function') {
+                await pali.request({ method: 'sys_requestAccounts', params: [] });
+            } else if (typeof pali.enable === 'function') {
+                await pali.enable();
+            }
+            await detectUtxoState();
+            status = `${net.name} conectada.`;
+        } catch (err) {
+            error = (/** @type {any} */(err)).message || 'Error de conexión UTXO';
+        } finally {
+            busyUtxoId = '';
+        }
+    }
+
+    async function detectActiveNetwork() {
+        try {
+            const ethereum = /** @type {any} */(window).ethereum;
+            if (!ethereum) return;
+            const chainHex = await ethereum.request({ method: 'eth_chainId' });
+            detectedChainId = parseInt(chainHex, 16).toString();
+        } catch (err) {
+            console.warn('Error detectando red EVM:', err);
+        }
+    }
+
+    /** @param {any} net */
+    async function switchNetwork(net) {
+        error = ''; status = ''; busyNetworkId = net.id;
+        try {
+            const ethereum = /** @type {any} */(window).ethereum;
+            if (!ethereum) throw new Error('Pali Wallet (EVM) no detectada.');
+
+            status = `Cambiando a ${net.name}...`;
             await ethereum.request({
                 method: 'wallet_switchEthereumChain',
                 params: [{ chainId: net.chainHex }],
             });
+
+            status = `Red cambiada a ${net.name}`;
+            dispatch('networkChanged', net.id);
         } catch (switchError) {
-            // Este código de error indica que la cadena no se ha añadido a MetaMask/Pali.
-            if (switchError.code === 4902 || switchError.code === -32603) {
+            if (/** @type {any} */(switchError).code === 4902) {
                 try {
-                    await ethereum.request({
+                    await (/** @type {any} */(window).ethereum).request({
                         method: 'wallet_addEthereumChain',
-                        params: [
-                            {
-                                chainId: net.chainHex,
-                                chainName: net.name,
-                                rpcUrls: [net.rpc],
-                                nativeCurrency: {
-                                    name: net.ticker,
-                                    symbol: net.ticker,
-                                    decimals: 18
-                                },
-                                blockExplorerUrls: [net.explorer]
-                            },
-                        ],
+                        params: [buildAddChainParams(net)],
                     });
+                    dispatch('networkChanged', net.id);
                 } catch (addError) {
-                    error = addError.message;
+                    error = (/** @type {any} */(addError)).message || 'Error al agregar la red';
                 }
             } else {
-                error = switchError.message;
+                error = (/** @type {any} */(switchError)).message || 'Error al cambiar de red';
             }
+        } finally {
+            busyNetworkId = '';
         }
     }
 </script>
+</script>
 
-<div class="networks-pane appear">
-    <div class="header-sec">
-        <h3>Gestor de Redes (Cross-Chain)</h3>
-        <p>Cambia fácilmente entre redes UTXO y EVM compatibles. Si la red no existe en tu wallet, se añadirá automáticamente.</p>
-        <div class="current-net">
-            <span class="current-dot"></span>
-            Red activa: <strong>{chainId ? `Chain ID ${chainId}` : 'No conectada'}</strong>
+<div class="networks-pane">
+    <div class="manager-header">
+        <h3 class="cinzel">CONTROL DE CAPAS</h3>
+        <p>Sincroniza tu Terminal con los diferentes Protocolos de Red.</p>
+    </div>
+
+    <div class="active-status">
+        <div class="status-item">
+            <span class="cinzel label">Protocolo EVM</span>
+            <strong class="value gold-text">{activeNetwork?.name || 'Inactivo'}</strong>
+        </div>
+        <div class="status-item">
+            <span class="cinzel label">Protocolo UTXO</span>
+            <strong class="value silver-text">{utxoNetworks.find(n => n.id === activeUtxoNetworkId)?.name || 'Inactivo'}</strong>
         </div>
     </div>
 
-    {#if error}
-        <div class="error-box">{error}</div>
+    <div class="section-divider cinzel">Capas EVM</div>
+    <div class="network-list">
+        {#each evmNetworks as net}
+            <button class="net-row {activeChainId === net.id ? 'active gold' : ''}" on:click={() => switchNetwork(net)} disabled={busyNetworkId !== ''}>
+                <div class="net-icon cinzel">{net.iconText}</div>
+                <div class="net-info">
+                    <span class="net-name">{net.name}</span>
+                    <span class="net-sub">Chain ID: {net.id}</span>
+                </div>
+                {#if activeChainId === net.id}
+                    <span class="status-tag gold">ACTIVA</span>
+                {:else}
+                    <span class="status-tag">USAR</span>
+                {/if}
+            </button>
+        {/each}
+    </div>
+
+    <div class="section-divider cinzel">Redes UTXO</div>
+    <div class="network-list">
+        {#each utxoNetworks as net}
+            <button class="net-row {activeUtxoNetworkId === net.id ? 'active silver' : ''}" on:click={() => connectUtxoNetwork(net)} disabled={busyUtxoId !== ''}>
+                <div class="net-icon cinzel silver">{net.iconText}</div>
+                <div class="net-info">
+                    <span class="net-name">{net.name}</span>
+                    <span class="net-sub">{net.symbol}</span>
+                </div>
+                {#if activeUtxoNetworkId === net.id}
+                    <span class="status-tag silver">CONECTADA</span>
+                {:else}
+                    <span class="status-tag">CONECTAR</span>
+                {/if}
+            </button>
+        {/each}
+    </div>
+
+    {#if status || error}
+        <footer class="msg-footer">
+            {#if status}<p class="status-msg">{status}</p>{/if}
+            {#if error}<p class="error-msg">{error}</p>{/if}
+        </footer>
     {/if}
-
-    <div class="section-label">🔷 Ecosistema Syscoin</div>
-    <div class="networks-grid">
-        {#each networks.filter(n => ['570','57000','57','5700'].includes(n.id)) as net, i}
-            <div class="network-card {chainId === net.id ? 'card-active' : ''} appear" style="animation-delay: {i * 80}ms">
-                <div class="net-top">
-                    <span class="net-icon">{net.icon}</span>
-                    <span class="net-type">{net.type}</span>
-                </div>
-                <h4>{net.name}</h4>
-                <p class="net-details">Chain ID: {net.id} | {net.ticker}</p>
-                
-                {#if chainId === net.id}
-                    <div class="status active">
-                        <span class="dot"></span> Red Activa
-                    </div>
-                {:else}
-                    <button class="btn-switch" on:click={() => switchNetwork(net)}>
-                        Conectar a {net.ticker}
-                    </button>
-                {/if}
-            </div>
-        {/each}
-    </div>
-
-    <div class="section-label">🌐 Otras Redes EVM</div>
-    <div class="networks-grid">
-        {#each networks.filter(n => !['570','57000','57','5700'].includes(n.id)) as net, i}
-            <div class="network-card {chainId === net.id ? 'card-active' : ''} appear" style="animation-delay: {(i + 4) * 80}ms">
-                <div class="net-top">
-                    <span class="net-icon">{net.icon}</span>
-                    <span class="net-type">{net.type}</span>
-                </div>
-                <h4>{net.name}</h4>
-                <p class="net-details">Chain ID: {net.id} | {net.ticker}</p>
-                
-                {#if chainId === net.id}
-                    <div class="status active">
-                        <span class="dot"></span> Red Activa
-                    </div>
-                {:else}
-                    <button class="btn-switch" on:click={() => switchNetwork(net)}>
-                        Conectar a {net.ticker}
-                    </button>
-                {/if}
-            </div>
-        {/each}
-    </div>
 </div>
 
 <style>
-    .networks-pane { text-align: left; }
-
-    .header-sec { margin-bottom: 2rem; }
-    .header-sec h3 {
-        margin: 0 0 0.2rem;
-        font-size: 1.25rem;
-        color: var(--platinum);
-    }
-    .header-sec p { margin: 0 0 1rem; font-size: 0.85rem; color: var(--muted); }
-
-    .current-net {
-        display: inline-flex;
-        align-items: center;
-        gap: 0.6rem;
-        background: rgba(0, 208, 142, 0.06);
-        border: 1px solid rgba(0, 208, 142, 0.15);
-        padding: 0.6rem 1.2rem;
-        border-radius: 12px;
-        font-size: 0.85rem;
-        color: var(--muted);
-    }
-
-    .current-net strong {
-        color: var(--accent, #00ffa3);
-    }
-
-    .current-dot {
-        width: 8px; height: 8px;
-        border-radius: 50%;
-        background: var(--accent, #00ffa3);
-        box-shadow: 0 0 8px var(--accent, #00ffa3);
-        animation: pulse 2s infinite;
-    }
-
-    .section-label {
-        font-size: 0.8rem;
-        color: var(--muted);
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-        font-weight: 700;
-        margin: 1.5rem 0 1rem;
-        padding-bottom: 0.5rem;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.04);
-    }
-
-    .networks-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-        gap: 1.25rem;
-    }
-
-    .network-card {
-        background: rgba(240, 242, 246, 0.03);
-        border: 1px solid var(--border);
-        border-radius: 16px;
-        padding: 1.5rem;
+    .networks-pane {
+        padding: 0.5rem;
         display: flex;
         flex-direction: column;
-        transition: all 0.2s;
-        position: relative;
-        overflow: hidden;
+        gap: 1rem;
     }
 
-    .network-card:hover {
-        background: rgba(240, 242, 246, 0.06);
-        border-color: var(--border-2);
-        transform: translateY(-2px);
+    .manager-header h3 {
+        margin: 0;
+        font-size: 1.1rem;
+        color: var(--accent);
     }
 
-    .network-card.card-active {
-        border-color: rgba(0, 208, 142, 0.3);
-        background: rgba(0, 208, 142, 0.04);
-        box-shadow: 0 0 20px rgba(0, 208, 142, 0.06);
+    .manager-header p {
+        margin: 0.2rem 0 0;
+        font-size: 0.75rem;
+        color: var(--text-secondary);
     }
 
-    .net-top {
+    .active-status {
+        background: var(--bg);
+        border: 1px solid var(--border-color);
+        padding: 0.75rem;
+        border-radius: 4px;
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+
+    .status-item {
         display: flex;
         justify-content: space-between;
         align-items: center;
-        margin-bottom: 1rem;
     }
 
-    .net-icon { font-size: 1.5rem; }
-
-    .net-type {
+    .status-item .label {
         font-size: 0.65rem;
-        background: rgba(240, 242, 246, 0.1);
-        padding: 0.2rem 0.5rem;
-        border-radius: 6px;
-        color: var(--muted);
+        color: var(--text-secondary);
         text-transform: uppercase;
-        letter-spacing: 0.05em;
     }
 
-    .network-card h4 {
-        margin: 0 0 0.3rem;
-        font-size: 1.05rem;
-        color: var(--platinum);
+    .status-item .value {
+        font-size: 0.85rem;
+        font-weight: 700;
     }
 
-    .net-details {
-        margin: 0 0 1.5rem;
-        font-size: 0.8rem;
-        color: rgba(139, 148, 158, 0.7);
-        font-family: monospace;
+    .gold-text { color: var(--accent); }
+    .silver-text { color: var(--accent-2); }
+
+    .section-divider {
+        font-size: 0.7rem;
+        color: var(--text-secondary);
+        border-bottom: 1px solid var(--border-color);
+        padding-bottom: 0.25rem;
+        margin-top: 0.5rem;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
     }
 
-    .status.active {
+    .network-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0.4rem;
+    }
+
+    .net-row {
+        background: var(--surface-soft);
+        border: 1px solid var(--border-color);
+        padding: 0.6rem;
+        border-radius: 4px;
         display: flex;
         align-items: center;
-        gap: 0.5rem;
-        font-size: 0.85rem;
-        color: var(--accent, #00d08e);
-        background: rgba(0, 208, 142, 0.1);
-        border: 1px solid rgba(0, 208, 142, 0.2);
-        padding: 0.6rem;
-        border-radius: 10px;
-        justify-content: center;
-        font-weight: 600;
-        margin-top: auto;
-    }
-
-    .dot {
-        width: 8px; height: 8px;
-        background: var(--accent, #00ffa3);
-        border-radius: 50%;
-        animation: pulse 2s infinite;
-    }
-
-    .btn-switch {
-        margin-top: auto;
-        background: rgba(240, 242, 246, 0.08);
-        border: 1px solid var(--border);
-        color: var(--text);
-        padding: 0.6rem;
-        border-radius: 10px;
-        font-size: 0.85rem;
+        gap: 0.75rem;
         cursor: pointer;
-        transition: background 0.2s;
-        font-weight: 500;
+        transition: all 0.2s;
+        text-align: left;
     }
 
-    .btn-switch:hover {
-        background: rgba(240, 242, 246, 0.15);
+    .net-row:hover:not(:disabled) {
+        background: var(--surface);
+        border-color: var(--accent-2);
     }
 
-    .error-box {
-        background: rgba(255, 107, 107, 0.1);
-        border: 1px solid rgba(255, 107, 107, 0.2);
-        color: var(--bad, #ff5555);
-        padding: 0.8rem;
-        border-radius: 12px;
-        margin-bottom: 1rem;
+    .net-row.active.gold { border-color: var(--accent); background: rgba(212, 175, 55, 0.05); }
+    .net-row.active.silver { border-color: var(--accent-2); background: rgba(192, 192, 192, 0.05); }
+
+    .net-icon {
+        width: 32px;
+        height: 32px;
+        background: var(--bg);
+        border: 1px solid var(--accent);
+        color: var(--accent);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 0.7rem;
+        font-weight: 900;
+        border-radius: 2px;
+    }
+
+    .net-icon.silver {
+        border-color: var(--accent-2);
+        color: var(--accent-2);
+    }
+
+    .net-info {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .net-name {
         font-size: 0.85rem;
+        font-weight: 700;
+        color: var(--text-primary);
     }
 
-    .appear { animation: fadeUp 400ms ease-out both; }
-    @keyframes fadeUp { from { opacity:0; transform:translateY(10px); } to {opacity:1; transform:translateY(0);} }
-    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+    .net-sub {
+        font-size: 0.65rem;
+        color: var(--text-secondary);
+    }
+
+    .status-tag {
+        font-size: 0.6rem;
+        font-weight: 800;
+        padding: 0.2rem 0.4rem;
+        border-radius: 2px;
+        background: var(--bg);
+        color: var(--text-secondary);
+        border: 1px solid var(--border-color);
+    }
+
+    .status-tag.gold { color: var(--accent); border-color: var(--accent); }
+    .status-tag.silver { color: var(--accent-2); border-color: var(--accent-2); }
+
+    .msg-footer {
+        padding-top: 0.5rem;
+        border-top: 1px solid var(--border-color);
+    }
+
+    .status-msg { font-size: 0.7rem; color: var(--accent-2); margin: 0; }
+    .error-msg { font-size: 0.7rem; color: var(--error); margin: 0; }
+
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
 </style>

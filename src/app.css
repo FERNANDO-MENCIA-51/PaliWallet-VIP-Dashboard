@@ -1,4 +1,62 @@
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&family=Outfit:wght@500;600;700;800&family=JetBrains+Mono:wght@500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap');
+
+:root {
+  /* Anti-Magic / Asta Transformation Theme */
+  --bg: #000000;
+  --surface: #0d0d0d;
+  --surface-soft: #161616;
+  --border-color: #252525;
+  --text-primary: #f0f0f0;
+  --text-secondary: #b0b0b0;
+  --accent: #e60000; /* Demonic Red */
+  --accent-2: #d0d0d0; /* Metallic Silver */
+  --accent-dark: #900000;
+  --warning: #ff4400;
+  --error: #ff0000;
+  --success: #00ff00;
+
+  --bg-dark: var(--bg);
+  --panel: var(--surface);
+  --border: var(--border-color);
+  --text: var(--text-primary);
+  --muted: var(--text-secondary);
+  --platinum: var(--text-primary);
+  --good: var(--success);
+  --bad: var(--error);
+}
+
+@keyframes asta-aura-pulse {
+  0% { box-shadow: 0 0 10px rgba(230, 0, 0, 0.1); }
+  50% { box-shadow: 0 0 25px rgba(230, 0, 0, 0.3); }
+  100% { box-shadow: 0 0 10px rgba(230, 0, 0, 0.1); }
+}
+
+@keyframes anti-magic-flow {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+.asta-aura {
+  background: linear-gradient(270deg, #000000, #0a0000, #000000);
+  background-size: 400% 400%;
+  animation: anti-magic-flow 10s ease infinite;
+  position: relative;
+}
+
+.asta-aura::after {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: radial-gradient(circle at 50% 50%, rgba(230, 0, 0, 0.05) 0%, transparent 70%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.clover-spin {
+  filter: drop-shadow(0 0 5px var(--accent));
+  animation: asta-aura-pulse 2s infinite ease-in-out;
+}
 
 * {
   box-sizing: border-box;
@@ -7,7 +65,30 @@
 }
 
 body {
-  font-family: 'Space Grotesk', 'IBM Plex Sans', system-ui, sans-serif;
-  background: #0b0d10;
-  color: #e9eaee;
+  font-family: 'Inter', system-ui, sans-serif;
+  background-color: var(--bg);
+  color: var(--text-primary);
+  overflow-x: hidden;
+}
+
+h1, h2, h3, h4, .cinzel {
+  font-family: 'Cinzel', serif;
+  letter-spacing: 0.05em;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--accent);
 }

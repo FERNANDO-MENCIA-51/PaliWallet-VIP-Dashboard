@@ -1,7 +1,10 @@
 <script>
     import { ethers } from 'ethers';
     import { fade } from 'svelte/transition';
+    import { SUPPORTED_EVM_CHAIN_IDS, getNetworkTicker } from './config/networks.js';
+    import { isValidEthereumAddress, isValidChecksumAddress, parseTransactionError } from '../composables/address.js';
 
+    /** @type {any} */
     export let signer = null;
     export let connected = false;
     export let explorerBase = '';
@@ -21,10 +24,12 @@
     let txStatus = 'idle';
     let confirmations = 0;
 
+    /** @type {() => void} */
     export let onTransactionConfirmed = () => {};
+    /** @type {(tx: any) => void} */
     export let onNewTransaction = (tx) => {};
 
-    const supportedChainIds = ['57', '570', '5700', '57000', '1', '11155111', '137', '56', '43114'];
+    $: nativeTicker = getNetworkTicker(chainId);
 
     function isBalanceReady() {
         const numericBalance = Number(balance);
@@ -79,6 +84,16 @@
             return;
         }
 
+        // Validación de checksum de dirección
+        const addrValidation = isValidChecksumAddress(toAddress);
+        if (!addrValidation.valid) {
+            error = 'Dirección de destino inválida. Verifica el formato (0x...).';
+            return;
+        }
+        if (addrValidation.suggestion && addrValidation.suggestion !== toAddress) {
+            toAddress = addrValidation.suggestion; // Auto-corregir a checksum
+        }
+
         const currentAddr = await signer.getAddress();
         if (toAddress.toLowerCase() === currentAddr.toLowerCase()) {
             if (!confirm('Estás enviando fondos a tu propia dirección. ¿Deseas continuar?')) {
@@ -86,8 +101,8 @@
             }
         }
 
-        if (!ethers.isAddress(toAddress)) {
-            error = 'Dirección de destino inválida.';
+        if (!isValidEthereumAddress(toAddress)) {
+            error = 'Dirección de destino inválida. Verifica el formato (0x...).';
             return;
         }
         if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) {
@@ -95,9 +110,14 @@
             return;
         }
 
-        if (!supportedChainIds.includes(chainId)) {
-            error = 'Red no compatible. Cambia a una red EVM soportada.';
-            return;
+        const currentChainId = chainId?.toString?.() || String(chainId);
+        if (!SUPPORTED_EVM_CHAIN_IDS.includes(currentChainId)) {
+            // Verificación alternativa: si tenemos signer con provider, es una red EVM válida
+            if (!signer?.provider) {
+                error = 'Red no compatible. Cambia a una red EVM soportada.';
+                return;
+            }
+            // Si hay provider, permitimos la transacción aunque el chainId no esté en la lista
         }
 
         if (!isBalanceReady()) {
@@ -139,7 +159,7 @@
             txStatus = 'confirmed';
             onTransactionConfirmed();
         } catch (err) {
-            error = err.reason || err.message || 'Error al enviar la transacción.';
+            error = parseTransactionError(err);
             txStatus = 'error';
         } finally {
             loading = false;
@@ -174,7 +194,7 @@
             </div>
 
             <div class="input-group">
-                <label for="amount">Monto (SYS/ETH)</label>
+                <label for="amount">Monto ({nativeTicker})</label>
                 <div class="input-wrapper">
                     <span class="prefix">Val:</span>
                     <input id="amount" type="number" bind:value={amount} placeholder="0.00" min="0" step="0.0001" on:blur={estimateGas} />

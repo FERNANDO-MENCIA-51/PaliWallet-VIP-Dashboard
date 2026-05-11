@@ -1,10 +1,25 @@
 <script>
     import { ethers } from 'ethers';
+
+    // ABI mínima para balanceOf de un token ERC20
+    const ERC20_ABI = [
+        "function balanceOf(address owner) view returns (uint256)",
+        "function decimals() view returns (uint8)",
+        "function symbol() view returns (string)",
+        "event Transfer(address indexed from, address indexed to, uint256 value)"
+    ];
+
+    // Dirección del contrato TSYS
+    const TOKEN_ADDRESS = "0x48e29Ec3a874FF754BE17D96dBE084dF54202B03";
+    let tokenBalance = '';
+    let tokenSymbol = 'TSYS';
+    let tokenDecimals = 18;
     import { onMount, tick } from 'svelte';
+    import { fade } from 'svelte/transition';
     import Intro from './lib/Intro.svelte';
     import Wallet from './lib/Wallet.svelte';
-    import Transfer from './lib/Transfer.svelte';
-    import Networks from './lib/Networks.svelte';
+    import { getExplorerApiUrl, getExplorerBase, getNetworkName, getNetworkTicker, EVM_NETWORKS } from './lib/config/networks.js';
+    import { fetchWithRetry } from './composables/retry.js';
 
     let address = '';
     let balance = '';
@@ -12,100 +27,236 @@
     let error = '';
     let connected = false;
     let loading = false;
-    let provider = /** @type {any} */ (null);
-    let signer = /** @type {any} */ (null);
+    /** @type {any} */
+    let provider = null;
+    /** @type {any} */
+    let signer = null;
 
-    /** @type {Array<{hash: string, to: string, amount: string, type: string, timestamp: string, chainId: string, explorerBase?: string}>} */
+    /** @type {any[]} */
     let history = [];
+    /** @type {any[]} */
+    let localHistory = [];
+    /** @type {any[]} */
+    let tokenHistory = [];
+    /** @type {any[]} */
+    let explorerHistory = [];
+    let tokenHistoryKey = '';
+    let explorerHistoryKey = '';
     let activeTab = 'intro';
+    let showNetworkDropdown = false;
 
     const tabs = [
         { id: 'intro', label: 'Inicio', icon: 'M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6' },
-        { id: 'wallet', label: 'Dashboard', icon: 'M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z' },
-        { id: 'transfer', label: 'Transferir', icon: 'M5 13l4 4L19 7M4 7h16M4 17h7' },
-        { id: 'networks', label: 'Gestor de Redes', icon: 'M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z' }
+        { id: 'wallet', label: 'Dashboard', icon: 'M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z' }
     ];
 
+    let showInitialLoader = true;
+
     onMount(() => {
-        animateLayout();
         tryAutoReconnect(); 
+        // 3.8s: Entrada directa en el pico del destello
+        setTimeout(() => { showInitialLoader = false; }, 3800);
     });
+
+    // Cuando cambie la dirección, consulta el balance del token
+    $: if (address && provider) {
+        loadTokenBalance();
+    }
+
+    $: if (address && provider && chainId) {
+        const nextKey = `${address.toLowerCase()}_${chainId}`;
+        if (tokenHistoryKey !== nextKey) {
+            tokenHistoryKey = nextKey;
+            loadTokenTransferHistory();
+        }
+    }
+
+    $: if (address && chainId) {
+        const nextKey = `${address.toLowerCase()}_${chainId}`;
+        if (explorerHistoryKey !== nextKey) {
+            explorerHistoryKey = nextKey;
+            loadExplorerHistory();
+        }
+    }
+
+    $: history = mergeHistory(localHistory, explorerHistory, tokenHistory);
+
+    async function loadTokenBalance() {
+        if (!provider) return;
+        try {
+            const contract = new ethers.Contract(TOKEN_ADDRESS, ERC20_ABI, provider);
+            const [raw, decimals, symbol] = await Promise.all([
+                contract.balanceOf(address),
+                contract.decimals(),
+                contract.symbol()
+            ]);
+            tokenDecimals = Number(decimals);
+            tokenSymbol = symbol;
+            tokenBalance = ethers.formatUnits(raw, decimals);
+        } catch (err) {
+            tokenBalance = '0';
+        }
+    }
 
     // Cargar historial cuando cambie la dirección
     $: if (address) {
         loadHistory(address);
     }
 
+    /** @param {string} addr */
     function loadHistory(addr) {
-        const saved = localStorage.getItem(`pali_history_${addr.toLowerCase()}`);
-        history = saved ? JSON.parse(saved) : [];
-    }
-
-    function getExplorerBase(id) {
-        switch (id) {
-            case '570':
-                return 'https://explorer.rollux.com/tx/';
-            case '57000':
-                return 'https://rollux.tanenbaum.io/tx/';
-            case '57':
-                return 'https://explorer.syscoin.org/tx/';
-            case '5700':
-                return 'https://explorer.tanenbaum.io/tx/';
-            case '57042':
-                return 'https://explorer-pob.dev11.top/tx/';
-            case '57057':
-                return 'https://explorer-zk.tanenbaum.io/tx/';
-            case '1':
-                return 'https://etherscan.io/tx/';
-            case '11155111':
-                return 'https://sepolia.etherscan.io/tx/';
-            case '137':
-                return 'https://polygonscan.com/tx/';
-            case '56':
-                return 'https://bscscan.com/tx/';
-            case '43114':
-                return 'https://snowtrace.io/tx/';
-            default:
-                return 'https://explorer.syscoin.org/tx/';
+        try {
+            const saved = localStorage.getItem(`pali_history_${addr.toLowerCase()}`);
+            const parsed = saved ? JSON.parse(saved) : [];
+            localHistory = Array.isArray(parsed) ? parsed : [];
+        } catch (err) {
+            console.warn('No se pudo leer historial local:', err);
+            localHistory = [];
         }
     }
 
+    /** @param {any[][]} groups */
+    function mergeHistory(...groups) {
+        const seen = new Set();
+        return groups.flat()
+            .filter((tx) => {
+                const key = `${tx.hash}_${tx.type}_${tx.assetSymbol || ''}_${tx.logIndex ?? ''}_${tx.amount}`;
+                if (seen.has(key)) return false;
+                seen.add(key);
+                return true;
+            })
+            .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    }
+
+    async function loadExplorerHistory() {
+        if (!address || !chainId) return;
+
+        const apiUrl = getExplorerApiUrl(chainId);
+        if (!apiUrl) {
+            explorerHistory = [];
+            return;
+        }
+
+        try {
+            const params = new URLSearchParams({
+                module: 'account',
+                action: 'txlist',
+                address,
+                sort: 'desc'
+            });
+            const response = await fetchWithRetry(`${apiUrl}?${params.toString()}`);
+            if (!response.ok) throw new Error(`Explorer API ${response.status}`);
+
+            const payload = await response.json();
+            const rows = Array.isArray(payload?.result) ? payload.result : [];
+            const account = address.toLowerCase();
+            const ticker = getNetworkTicker(chainId);
+
+            explorerHistory = rows
+                .filter(/** @param {any} tx */(tx) => tx.hash && tx.value && tx.value !== '0')
+                .map(/** @param {any} tx */(tx) => {
+                    const from = tx.from || '';
+                    const to = tx.to || '';
+                    const isReceived = to.toLowerCase() === account;
+                    return {
+                        hash: tx.hash,
+                        from,
+                        to,
+                        amount: ethers.formatEther(tx.value),
+                        type: isReceived ? 'Received' : 'Sent',
+                        timestamp: tx.timeStamp ? new Date(Number(tx.timeStamp) * 1000).toISOString() : new Date().toISOString(),
+                        chainId,
+                        networkName: getNetworkName(chainId),
+                        explorerBase: getExplorerBase(chainId),
+                        assetSymbol: ticker,
+                        source: 'explorer',
+                        status: tx.isError === '1' || tx.txreceipt_status === '0' ? 'Failed' : 'Confirmed'
+                    };
+                });
+        } catch (err) {
+            console.warn('No se pudo cargar historial del explorer:', err);
+            explorerHistory = [];
+        }
+    }
+
+    async function loadTokenTransferHistory() {
+        if (!provider || !address) return;
+
+        try {
+            const contract = new ethers.Contract(TOKEN_ADDRESS, ERC20_ABI, provider);
+            const [decimals, symbol, latestBlock] = await Promise.all([
+                contract.decimals(),
+                contract.symbol(),
+                provider.getBlockNumber()
+            ]);
+            const fromBlock = Math.max(0, latestBlock - 120000);
+            const sentFilter = contract.filters.Transfer(address, null);
+            const receivedFilter = contract.filters.Transfer(null, address);
+            const [sentLogs, receivedLogs] = await Promise.all([
+                contract.queryFilter(sentFilter, fromBlock, latestBlock),
+                contract.queryFilter(receivedFilter, fromBlock, latestBlock)
+            ]);
+
+            const logs = [...sentLogs, ...receivedLogs];
+            const blocks = new Map();
+
+            tokenHistory = await Promise.all(logs.map(async (event) => {
+                const parsed = /** @type {any} */(event).args;
+                const from = parsed?.from || parsed?.[0];
+                const to = parsed?.to || parsed?.[1];
+                const value = parsed?.value || parsed?.[2];
+                const isReceived = String(to).toLowerCase() === address.toLowerCase();
+                const blockNumber = event.blockNumber;
+
+                if (!blocks.has(blockNumber)) {
+                    blocks.set(blockNumber, provider?.getBlock(blockNumber));
+                }
+
+                const block = await blocks.get(blockNumber);
+
+                return {
+                    hash: event.transactionHash,
+                    from,
+                    to,
+                    amount: ethers.formatUnits(value, decimals),
+                    type: isReceived ? 'Received' : 'Sent',
+                    timestamp: block?.timestamp ? new Date(block.timestamp * 1000).toISOString() : new Date().toISOString(),
+                    chainId,
+                    networkName: getNetworkName(chainId),
+                    explorerBase: getExplorerBase(chainId),
+                    assetSymbol: symbol,
+                    isToken: true,
+                    source: 'token-event',
+                    logIndex: event.index
+                };
+            }));
+        } catch (err) {
+            console.warn('No se pudo cargar historial de TSYS:', err);
+        }
+    }
+
+    /** @param {any} tx */
     function recordTransaction(tx) {
         if (!address) return;
         const newEntry = {
             ...tx,
             timestamp: new Date().toISOString(),
             chainId: chainId,
-            explorerBase: getExplorerBase(chainId)
+            networkName: getNetworkName(chainId),
+            explorerBase: getExplorerBase(chainId),
+            assetSymbol: getNetworkTicker(chainId),
+            isToken: false,
+            source: 'local'
         };
-        history = [newEntry, ...history];
-        localStorage.setItem(`pali_history_${address.toLowerCase()}`, JSON.stringify(history));
-    }
-
-    function animateLayout() {
-        const win = /** @type {any} */ (window);
-        if (win.anime) {
-            win.anime({
-                targets: '.sidebar',
-                translateX: [-280, 0],
-                easing: 'easeOutExpo',
-                duration: 1500
-            });
-            win.anime({
-                targets: '.main-content',
-                opacity: [0, 1],
-                easing: 'linear',
-                duration: 800,
-                delay: 300
-            });
-        }
+        localHistory = [newEntry, ...localHistory];
+        localStorage.setItem(`pali_history_${address.toLowerCase()}`, JSON.stringify(localHistory));
     }
 
     async function tryAutoReconnect() {
         const wasConnected = sessionStorage.getItem('pali_connected');
         if (!wasConnected) return;
 
-        const ethereum = window['ethereum'];
+        const ethereum = /** @type {any} */(window).ethereum;
         if (!ethereum) return;
 
         try {
@@ -121,7 +272,8 @@
 
                 setupListeners(ethereum);
                 connected = true;
-                changeTab('wallet');
+                // Siempre empezar en intro como pidió el usuario
+                activeTab = 'intro';
             } else {
                 sessionStorage.removeItem('pali_connected');
             }
@@ -131,6 +283,7 @@
         }
     }
 
+    /** @param {any} ethereum */
     function setupListeners(ethereum) {
         if (ethereum.on) {
             ethereum.on('chainChanged', handleChainChanged);
@@ -139,35 +292,28 @@
     }
 
     function removeListeners() {
-        const ethereum = window['ethereum'];
+        const ethereum = /** @type {any} */(window).ethereum;
         if (ethereum?.removeListener) {
             ethereum.removeListener('chainChanged', handleChainChanged);
             ethereum.removeListener('accountsChanged', handleAccountsChanged);
         }
     }
 
+    /** @param {string} id */
     async function changeTab(id) {
         if (!connected && id !== 'intro') return;
         activeTab = id;
         await tick();
-        
-        const win = /** @type {any} */ (window);
-        if (win.anime) {
-            win.anime({
-                targets: '.content-glass',
-                scale: [0.98, 1],
-                opacity: [0, 1],
-                easing: 'easeOutQuart',
-                duration: 600
-            });
-        }
     }
 
     async function connectWallet() {
         error = ''; loading = true;
         try {
-            const ethereum = window['ethereum'];
-            if (!ethereum) { error = 'Pali Wallet no detectada.'; return; }
+            const ethereum = /** @type {any} */(window).ethereum;
+            if (!ethereum) { 
+                error = 'Pali Wallet no detectada.'; 
+                return; 
+            }
             
             await ethereum.request({ 
                 method: 'wallet_requestPermissions', 
@@ -175,7 +321,7 @@
             });
 
             const accounts = await ethereum.request({ method: 'eth_requestAccounts' });
-            if (!accounts || accounts.length === 0) throw new Error('No se seleccionó ninguna cuenta.');
+            if (!accounts || accounts.length === 0) throw new Error('No se seleccionó cuenta.');
 
             provider = new ethers.BrowserProvider(ethereum);
             signer = await provider.getSigner();
@@ -192,8 +338,7 @@
             connected = true;
             changeTab('wallet');
         } catch (err) {
-            error = err.message || 'Error al conectar la wallet';
-            console.error(err);
+            error = (/** @type {any} */(err)).message || 'Error conexión';
         } finally {
             loading = false;
         }
@@ -209,37 +354,55 @@
         }
     }
 
+    /** @param {string} _chainHex */
     async function handleChainChanged(_chainHex) {
         try {
-            const ethereum = window['ethereum'];
+            const ethereum = /** @type {any} */(window).ethereum;
             if (!ethereum) return;
-
             provider = new ethers.BrowserProvider(ethereum);
             signer = await provider.getSigner();
             address = await signer.getAddress();
-
             const network = await provider.getNetwork();
             chainId = network.chainId.toString();
-
             await refreshBalance();
+            await loadTokenBalance();
+            showNetworkDropdown = false;
         } catch (err) {
-            console.error('Error handling chain change:', err);
+            console.error('Error chain change:', err);
         }
     }
 
+    /** @param {any} net */
+    async function switchNetwork(net) {
+        const ethereum = /** @type {any} */(window).ethereum;
+        if (!ethereum) return;
+        try {
+            await ethereum.request({
+                method: 'wallet_switchEthereumChain',
+                params: [{ chainId: net.chainHex }]
+            });
+            showNetworkDropdown = false;
+        } catch (err) {
+            console.error('Switch network error:', err);
+        }
+    }
+
+    /** @param {string[]} accounts */
     async function handleAccountsChanged(accounts) {
         if (!accounts || accounts.length === 0) {
             disconnect();
             return;
         }
         try {
-            const ethereum = window['ethereum'];
+            const ethereum = /** @type {any} */(window).ethereum;
+            if (!ethereum) return;
             provider = new ethers.BrowserProvider(ethereum);
             signer = await provider.getSigner();
             address = await signer.getAddress();
             await refreshBalance();
+            await loadTokenBalance();
         } catch (err) {
-            console.error('Error handling account change:', err);
+            console.error('Error account change:', err);
         }
     }
 
@@ -252,411 +415,565 @@
         provider = null; 
         signer = null;
         history = [];
+        localHistory = [];
+        tokenHistory = [];
+        explorerHistory = [];
+        tokenHistoryKey = '';
+        explorerHistoryKey = '';
+        tokenBalance = '';
         sessionStorage.removeItem('pali_connected');
         changeTab('intro');
     }
 
+    /** Click outside handler para cerrar dropdown */
+    function handleGlobalClick() {
+        if (showNetworkDropdown) showNetworkDropdown = false;
+    }
+
+    /** @param {string} addr */
     function shortAddress(addr) {
         return addr ? addr.slice(0, 6) + '...' + addr.slice(-4) : '';
     }
+
+
 </script>
 
-<div class="app-container bg-grid">
-    <aside class="sidebar">
-        <div class="sidebar-brand">
-            <div class="logo-circle">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                    <rect x="2" y="5" width="20" height="14" rx="2"/>
-                    <path d="M16 12h.01"/><path d="M2 10h20"/>
-                </svg>
-            </div>
-            <div>
-                <h2>Fernando VIP</h2>
-                <span>Innovacion Blockchain</span>
-            </div>
+{#if showInitialLoader}
+    <div class="initial-loader" out:fade={{ duration: 400 }}>
+        <!-- Anillos de energía -->
+        <div class="energy-ring ring-1"></div>
+        <div class="energy-ring ring-2"></div>
+        <div class="energy-ring ring-3"></div>
+        
+        <!-- Partículas flotantes -->
+        <div class="particles">
+            <span class="particle p1"></span>
+            <span class="particle p2"></span>
+            <span class="particle p3"></span>
+            <span class="particle p4"></span>
+            <span class="particle p5"></span>
+            <span class="particle p6"></span>
+            <span class="particle p7"></span>
+            <span class="particle p8"></span>
         </div>
 
-        <div class="sidebar-section">
-            <div class="sidebar-title">Menu principal</div>
-            <nav class="sidebar-nav">
+        <!-- Trébol evolutivo -->
+        <div class="clover-stage">
+            <svg viewBox="0 0 200 200" class="clover-svg">
+                <!-- Hoja 1 - Arriba -->
+                <path class="leaf leaf-1" d="M100 100 Q100 55 85 40 Q70 25 55 40 Q40 55 55 70 Q70 85 100 100" />
+                <!-- Hoja 2 - Derecha -->
+                <path class="leaf leaf-2" d="M100 100 Q145 100 160 85 Q175 70 160 55 Q145 40 130 55 Q115 70 100 100" />
+                <!-- Hoja 3 - Izquierda -->
+                <path class="leaf leaf-3" d="M100 100 Q55 100 40 115 Q25 130 40 145 Q55 160 70 145 Q85 130 100 100" />
+                <!-- Hoja 4 - Abajo -->
+                <path class="leaf leaf-4" d="M100 100 Q100 145 115 160 Q130 175 145 160 Q160 145 145 130 Q130 115 100 100" />
+                <!-- Hoja 5 - Demonio (diagonal) -->
+                <path class="leaf leaf-5" d="M100 100 Q130 70 150 55 Q165 45 155 30 Q140 20 125 35 Q110 50 100 100" />
+                <!-- Tallo -->
+                <line class="stem" x1="100" y1="100" x2="100" y2="175" />
+                <!-- Centro -->
+                <circle cx="100" cy="100" r="5" class="clover-core" />
+            </svg>
+        </div>
+    </div>
+{/if}
+
+
+<svelte:window on:click={handleGlobalClick} />
+
+<div class="app-container asta-aura">
+
+    <nav class="navbar">
+        <div class="nav-left">
+            <div class="brand">
+                <svg width="30" height="30" viewBox="0 0 200 200" fill="none" class="nav-clover">
+                    <path d="M100 100 Q100 55 85 40 Q70 25 55 40 Q40 55 55 70 Q70 85 100 100" fill="var(--accent)" />
+                    <path d="M100 100 Q145 100 160 85 Q175 70 160 55 Q145 40 130 55 Q115 70 100 100" fill="var(--accent)" />
+                    <path d="M100 100 Q55 100 40 115 Q25 130 40 145 Q55 160 70 145 Q85 130 100 100" fill="var(--accent)" />
+                    <path d="M100 100 Q100 145 115 160 Q130 175 145 160 Q160 145 145 130 Q130 115 100 100" fill="var(--accent)" />
+                    <path d="M100 100 Q130 70 150 55 Q165 45 155 30 Q140 20 125 35 Q110 50 100 100" fill="var(--accent)" opacity="0.7"/>
+                    <circle cx="100" cy="100" r="6" fill="var(--accent)" />
+                </svg>
+                <h2 class="cinzel">CORE<span>TERMINAL</span></h2>
+            </div>
+            
+            <div class="nav-links">
                 {#each tabs as tab}
                     <button 
-                        class="nav-item {activeTab === tab.id ? 'active' : ''}"
+                        class="nav-link {activeTab === tab.id ? 'active' : ''}"
                         on:click={() => changeTab(tab.id)}
                         disabled={!connected && tab.id !== 'intro'}
                     >
-                        <span class="nav-icon">
-                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                <path d={tab.icon}/>
-                            </svg>
-                        </span>
-                        <span class="nav-label">{tab.label}</span>
-                        {#if tab.id === activeTab}
-                            <div class="active-indicator"></div>
-                        {/if}
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d={tab.icon}/>
+                        </svg>
+                        {tab.label}
                     </button>
                 {/each}
-            </nav>
+            </div>
         </div>
 
-        <div class="sidebar-footer">
+        <div class="nav-right">
             {#if connected}
-                <div class="user-pill">
-                    <div class="user-avatar">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2.5"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-                    </div>
-                    <div class="user-info">
-                        <span class="addr">{shortAddress(address)}</span>
-                        <span class="net-status"><span class="dot"></span> Online</span>
-                    </div>
-                    <button class="btn-disconnect-icon" on:click={disconnect} title="Desconectar">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>
-                        </svg>
+                <div class="net-switcher" on:click|stopPropagation>
+                    <button class="net-btn" on:click={() => showNetworkDropdown = !showNetworkDropdown}>
+                        <span class="dot"></span>
+                        {getNetworkName(chainId)}
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg>
                     </button>
-                </div>
-            {:else}
-                <button class="btn-connect-full" on:click={connectWallet} disabled={loading}>
-                    {#if loading}
-                        <span class="spinner"></span>
-                    {:else}
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
-                        Conectar Wallet
+                    {#if showNetworkDropdown}
+                        <div class="net-dropdown" transition:fade={{ duration: 150 }}>
+                            <p class="dropdown-title">Seleccionar Protocolo</p>
+                            {#each EVM_NETWORKS as net}
+                                <button 
+                                    class="net-item {chainId === net.id ? 'active' : ''}"
+                                    on:click={() => switchNetwork(net)}
+                                >
+                                    <span class="net-dot {chainId === net.id ? 'on' : ''}"></span>
+                                    {net.name}
+                                </button>
+                            {/each}
+                        </div>
                     {/if}
+                </div>
+
+                <button class="logout-btn" on:click={disconnect} title="Cerrar Sesión">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/>
+                    </svg>
+                    Cerrar Sesión
+                </button>
+            {:else}
+                <button class="connect-btn" on:click={connectWallet} disabled={loading}>
+                    {loading ? 'Conectando...' : 'Conectar Wallet'}
                 </button>
             {/if}
         </div>
-    </aside>
+    </nav>
 
     <main class="main-content">
-        <header class="topbar">
-            <div class="topbar-title">
-                <h1>{tabs.find(t => t.id === activeTab)?.label}</h1>
-                <p class="breadcrumbs">System / <span>{tabs.find(t => t.id === activeTab)?.label}</span></p>
-            </div>
-            
-            <div class="topbar-actions">
-                {#if error}
-                    <div class="error-badge">⚠️ Error conexión</div>
-                {/if}
-                <div class="time-badge">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-                    Sesión Activa
-                </div>
-            </div>
-        </header>
-
-        <div class="content-wrapper">
-            <div class="content-glass">
-                {#if activeTab === 'intro'}
-                    <Intro />
-                {:else if activeTab === 'wallet'}
-                    <Wallet {balance} {address} {chainId} {history} />
-                {:else if activeTab === 'transfer'}
-                    <Transfer 
-                        {signer} 
-                        {connected} 
-                        {balance}
-                        {chainId}
-                        explorerBase={getExplorerBase(chainId)}
-                        onTransactionConfirmed={refreshBalance} 
-                        onNewTransaction={recordTransaction}
-                    />
-                {:else if activeTab === 'networks'}
-                    <Networks {chainId} />
-                {/if}
-            </div>
+        <div class="view-container">
+            {#if activeTab === 'intro'}
+                <Intro />
+            {:else if activeTab === 'wallet'}
+                <Wallet 
+                    {balance} {address} {chainId} {history} {tokenBalance} {tokenSymbol} {signer} {connected}
+                    onTransactionConfirmed={refreshBalance} 
+                    onNewTransaction={recordTransaction}
+                />
+            {/if}
         </div>
-
-        <footer class="app-footer">
-            <div class="footer-left">
-                <strong>Fernando VIP Dashboard</strong>
-                <span>Proyecto de Innovacion Blockchain</span>
-            </div>
-            <div class="footer-right">
-                <span>Version 1.0</span>
-                <span>UI Profesional + Multi Red</span>
-                <span>Actividad completada</span>
-            </div>
-        </footer>
     </main>
 </div>
 
+
 <style>
-  :global(:root) {
-    --bg-dark: #0a0c10;
-    --sidebar-bg: rgba(13, 16, 21, 0.95);
-    --panel: rgba(18, 22, 28, 0.6);
-    --border: rgba(255, 255, 255, 0.05);
-    --border-2: rgba(255, 255, 255, 0.1);
-    
-    --text: #ffffff;
-    --muted: #8b949e;
-    
-    --accent: #00d08e;
-    --accent-2: #4b5563;
-    --accent-glow: rgba(0, 208, 142, 0.18);
-    
-    --platinum: #f0f6fc;
-    --good: #00ffa3;
-    --bad: #ff5555;
-    --muted-2: #636c76;
-    --shadow-soft: 0 4px 24px rgba(0,0,0,0.3);
-  }
+    .app-container {
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        background-color: var(--bg);
+    }
 
-    :global(body) {
-        margin: 0; padding: 0;
-        font-family: 'Space Grotesk', 'IBM Plex Sans', system-ui, sans-serif;
-    background: var(--bg-dark);
-    color: var(--text);
-    overflow: hidden;
-  }
+    .navbar {
+        height: 70px;
+        padding: 0 5%;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        background: rgba(10, 10, 10, 0.95);
+        border-bottom: 1px solid var(--border-color);
+        position: sticky;
+        top: 0;
+        z-index: 100;
+        backdrop-filter: blur(10px);
+    }
 
-  .app-container {
-    display: flex;
-    height: 100vh;
-    width: 100vw;
-    position: relative;
-    overflow: hidden;
-  }
+    .nav-left, .nav-right {
+        display: flex;
+        align-items: center;
+        gap: 1.5rem;
+    }
 
-  .bg-grid::before {
-    content: ''; position: absolute; inset: 0; pointer-events: none; opacity: 0.15; z-index: 0;
-    background-image: 
-        radial-gradient(var(--accent) 0.5px, transparent 0.5px);
-    background-size: 30px 30px;
-  }
+    .brand {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+    }
 
-    .sidebar {
-        width: 290px;
-        background: var(--sidebar-bg);
-    backdrop-filter: blur(30px);
-    border-right: 1px solid var(--border);
-    display: flex;
-    flex-direction: column;
-    z-index: 10;
-    box-shadow: 10px 0 30px rgba(0,0,0,0.5);
-  }
+    .nav-clover {
+        filter: drop-shadow(0 0 4px rgba(230, 0, 0, 0.5));
+    }
 
-    .sidebar-brand {
-        padding: 2.25rem 1.6rem 1.6rem;
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-  }
+    .brand h2 {
+        font-size: 1.1rem;
+        margin: 0;
+        color: #e0e0e0;
+    }
 
-    .sidebar-title {
-        font-size: 0.7rem;
+    .brand h2 span {
+        color: var(--accent);
+        margin-left: 4px;
+    }
+
+    .nav-links {
+        display: flex;
+        gap: 0.5rem;
+    }
+
+    .nav-link {
+        background: none;
+        border: none;
+        color: #bbb;
+        font-weight: 600;
+        cursor: pointer;
+        padding: 0.5rem 1rem;
+        transition: color 0.2s, background 0.2s;
+        border-radius: 6px;
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        font-size: 0.85rem;
+    }
+
+    .nav-link:hover:not(:disabled) {
+        color: var(--accent);
+        background: rgba(230, 0, 0, 0.08);
+    }
+
+    .nav-link.active {
+        color: var(--accent);
+        background: rgba(230, 0, 0, 0.12);
+    }
+
+    .nav-link:disabled {
+        opacity: 0.3;
+        cursor: not-allowed;
+    }
+
+    .net-switcher {
+        position: relative;
+    }
+
+    .net-btn {
+        background: rgba(255,255,255,0.04);
+        border: 1px solid var(--border-color);
+        color: #ddd;
+        padding: 0.45rem 0.9rem;
+        border-radius: 8px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        font-size: 0.8rem;
+        font-weight: 600;
+        transition: border-color 0.2s;
+    }
+
+    .net-btn:hover {
+        border-color: var(--accent);
+    }
+
+    .dot {
+        width: 7px;
+        height: 7px;
+        background: var(--success);
+        border-radius: 50%;
+        box-shadow: 0 0 6px var(--success);
+    }
+
+    .net-dropdown {
+        position: absolute;
+        top: 120%;
+        right: 0;
+        background: #111;
+        border: 1px solid var(--border-color);
+        border-radius: 10px;
+        padding: 0.5rem;
+        min-width: 200px;
+        box-shadow: 0 15px 40px rgba(0,0,0,0.7);
+    }
+
+    .dropdown-title {
+        font-size: 0.65rem;
+        color: #888;
         text-transform: uppercase;
-        letter-spacing: 0.12em;
-        color: var(--muted-2);
-        padding: 0 1.6rem 0.75rem;
+        margin: 0.5rem 0.75rem;
+        font-weight: 800;
+        letter-spacing: 0.1em;
+    }
+
+    .net-item {
+        width: 100%;
+        padding: 0.55rem 0.75rem;
+        background: none;
+        border: none;
+        color: #ccc;
+        text-align: left;
+        cursor: pointer;
+        border-radius: 6px;
+        font-size: 0.85rem;
+        display: flex;
+        align-items: center;
+        gap: 0.6rem;
+        transition: background 0.15s;
+    }
+
+    .net-item:hover {
+        background: rgba(230, 0, 0, 0.08);
+        color: #fff;
+    }
+
+    .net-item.active {
+        color: var(--accent);
         font-weight: 700;
     }
 
-    .sidebar-section {
-        padding-bottom: 1rem;
-        border-bottom: 1px solid var(--border);
-    }
-
-    .logo-circle {
-        width: 46px; height: 46px;
-        background: linear-gradient(135deg, var(--accent), var(--accent-2));
-    border-radius: 12px;
-    display: flex; align-items: center; justify-content: center;
-    box-shadow: 0 0 20px var(--accent-glow);
-  }
-
-  .sidebar-brand h2 { margin: 0; font-size: 1.3rem; font-weight: 800; color: #fff; font-family: 'Outfit', sans-serif; }
-  .sidebar-brand span { font-size: 0.7rem; color: var(--accent); font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; opacity: 0.8; }
-
-    .sidebar-nav {
-        flex: 1;
-        padding: 0 1rem 1rem;
-        display: flex;
-        flex-direction: column;
-        gap: 0.55rem;
-    }
-
-    .nav-item {
-        position: relative;
-        display: flex; align-items: center; gap: 0.85rem;
-        width: 100%; padding: 0.75rem 0.9rem;
-        background: transparent; border: 1px solid transparent; border-radius: 12px;
-        color: var(--muted); font-size: 0.9rem; font-weight: 600;
-        cursor: pointer; transition: all 0.3s; text-align: left;
-    }
-
-  .nav-item:hover:not(:disabled) {
-    background: rgba(255, 255, 255, 0.03);
-    color: #fff;
-  }
-
-    .nav-item.active {
-        color: var(--text);
-        background: rgba(0, 255, 163, 0.08);
-        border-color: rgba(0, 255, 163, 0.2);
-        box-shadow: 0 0 20px rgba(0, 255, 163, 0.08);
-    }
-
-    .nav-icon {
-        width: 34px;
-        height: 34px;
-        border-radius: 10px;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        background: rgba(240, 242, 246, 0.06);
-        border: 1px solid rgba(240, 242, 246, 0.08);
+    .net-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: #333;
         flex-shrink: 0;
     }
 
-    .nav-label {
-        font-weight: 600;
+    .net-dot.on {
+        background: var(--success);
+        box-shadow: 0 0 6px var(--success);
     }
 
-  .nav-item:disabled { opacity: 0.2; cursor: not-allowed; }
-
-  .active-indicator {
-    position: absolute; left: 0; top: 25%; height: 50%; width: 3px;
-    background: var(--accent); border-radius: 0 4px 4px 0;
-    box-shadow: 0 0 15px var(--accent);
-  }
-
-  .sidebar-footer {
-        margin-top: auto;
-        padding: 2.2rem 1.5rem 2.4rem;
-    border-top: 1px solid var(--border);
-  }
-
-  .btn-connect-full {
-    width: 100%; padding: 0.9rem;
-    background: #fff; border: none;
-    color: #000; border-radius: 12px;
-    font-weight: 800; font-size: 0.9rem;
-    display: flex; align-items: center; justify-content: center; gap: 0.5rem;
-    cursor: pointer; transition: all 0.2s;
-  }
-
-  .btn-connect-full:hover:not(:disabled) {
-    background: var(--accent);
-    box-shadow: 0 0 20px var(--accent-glow);
-    transform: translateY(-2px);
-  }
-
-  .user-pill {
-    display: flex; align-items: center; gap: 0.8rem;
-    background: rgba(255,255,255,0.03); border: 1px solid var(--border);
-    padding: 0.8rem; border-radius: 16px;
-  }
-
-  .user-avatar {
-    width: 36px; height: 36px; border-radius: 10px;
-    background: rgba(0, 255, 163, 0.1); border: 1px solid rgba(0, 255, 163, 0.2);
-    display: flex; align-items: center; justify-content: center;
-  }
-
-  .user-info { flex: 1; display: flex; flex-direction: column; gap: 0.15rem; overflow: hidden; }
-  .user-info .addr { font-family: 'JetBrains Mono', monospace; font-size: 0.75rem; font-weight: 600; color: var(--muted); }
-  .user-info .net-status { font-size: 0.65rem; color: var(--muted); display: flex; align-items: center; gap: 0.3rem; font-weight: 600; text-transform: uppercase; }
-
-  .user-info .net-status { font-size: 0.65rem; color: var(--muted); display: flex; align-items: center; gap: 0.3rem; font-weight: 600; text-transform: uppercase; }
-  
-  .dot { width: 6px; height: 6px; background: var(--accent); border-radius: 50%; box-shadow: 0 0 10px var(--accent); animation: pulse 2s infinite; }
-
-  .btn-disconnect-icon {
-    background: rgba(255,255,255,0.05); border: 1px solid var(--border);
-    color: var(--bad); width: 34px; height: 34px; border-radius: 10px;
-    display: flex; align-items: center; justify-content: center; cursor: pointer;
-    transition: all 0.2s;
-  }
-  .btn-disconnect-icon:hover { background: var(--bad); color: #fff; }
-
-  .main-content {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    position: relative;
-    background: radial-gradient(circle at 50% -20%, #161b22, transparent);
-  }
-
-  .topbar {
-    height: 90px; padding: 0 3.5rem;
-    display: flex; align-items: center; justify-content: space-between;
-    border-bottom: 1px solid var(--border);
-  }
-
-  .topbar-title h1 { margin: 0; font-size: 1.8rem; color: #fff; font-weight: 800; letter-spacing: -0.03em; font-family: 'Outfit', sans-serif; }
-  .breadcrumbs { margin: 0.2rem 0 0; font-size: 0.8rem; color: var(--muted); font-weight: 500; }
-  .breadcrumbs span { color: var(--accent); }
-
-  .topbar-actions { display: flex; align-items: center; gap: 1.2rem; }
-  
-  .error-badge { background: rgba(255,85,85,0.1); border: 1px solid rgba(255,85,85,0.2); color: var(--bad); padding: 0.5rem 1rem; border-radius: 10px; font-size: 0.8rem; font-weight: 700; }
-  
-  .time-badge {
-    display: flex; align-items: center; gap: 0.6rem;
-    background: rgba(255,255,255,0.03); border: 1px solid var(--border);
-    padding: 0.5rem 1rem; border-radius: 10px;
-    font-size: 0.8rem; color: var(--muted); font-weight: 600;
-  }
-
-  .content-wrapper {
-    flex: 1;
-    padding: 2.5rem 3.5rem;
-    overflow-y: auto;
-  }
-
-  .content-glass {
-    background: var(--panel);
-    backdrop-filter: blur(40px);
-    border: 1px solid var(--border-2);
-    border-radius: 32px;
-    padding: 3rem;
-    min-height: calc(100% - 3rem);
-    box-shadow: 0 20px 60px rgba(0,0,0,0.4);
-    position: relative;
-  }
-
-    .app-footer {
+    .logout-btn {
+        background: none;
+        border: 1px solid rgba(230, 0, 0, 0.3);
+        color: #ccc;
+        padding: 0.45rem 1rem;
+        border-radius: 8px;
+        cursor: pointer;
         display: flex;
-        justify-content: space-between;
         align-items: center;
-        padding: 1.2rem 3.5rem 1.8rem;
-        color: var(--muted);
+        gap: 0.4rem;
         font-size: 0.8rem;
+        font-weight: 600;
+        transition: all 0.2s;
     }
 
-    .footer-left {
+    .logout-btn:hover {
+        background: rgba(230, 0, 0, 0.15);
+        border-color: var(--accent);
+        color: var(--accent);
+    }
+
+    .connect-btn {
+        background: var(--accent);
+        color: #000;
+        border: none;
+        padding: 0.55rem 1.5rem;
+        border-radius: 8px;
+        font-weight: 700;
+        cursor: pointer;
+        transition: transform 0.2s, box-shadow 0.2s;
+        font-size: 0.85rem;
+    }
+
+    .connect-btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 15px rgba(230, 0, 0, 0.4);
+    }
+
+
+    .main-content {
+        flex: 1;
+        padding: 3rem 5%;
+        overflow-y: auto;
+    }
+
+    .view-container {
+        max-width: 1400px;
+        margin: 0 auto;
+    }
+
+    /* ═══════════════════════════════════════════════════
+       CINEMATIC CLOVER LOADER
+       ═══════════════════════════════════════════════════ */
+
+    .initial-loader {
+        position: fixed;
+        inset: 0;
+        background: #000;
+        z-index: 1000;
         display: flex;
-        flex-direction: column;
-        gap: 0.2rem;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
     }
 
-    .footer-left strong {
-        color: var(--platinum);
-        font-size: 0.95rem;
+    /* ── Energy Rings ── */
+    .energy-ring {
+        position: absolute;
+        border-radius: 50%;
+        border: 1px solid rgba(230, 0, 0, 0.15);
+        opacity: 0;
     }
 
-    .footer-right {
-        display: flex;
-        gap: 1.2rem;
-        flex-wrap: wrap;
-        justify-content: flex-end;
+    .ring-1 {
+        width: 300px; height: 300px;
+        animation: ring-expand 2s ease-out 0.5s forwards;
+    }
+    .ring-2 {
+        width: 450px; height: 450px;
+        animation: ring-expand 2s ease-out 1.2s forwards;
+    }
+    .ring-3 {
+        width: 600px; height: 600px;
+        animation: ring-expand 2s ease-out 1.8s forwards;
     }
 
-  .spinner { width: 14px; height: 14px; border: 2px solid transparent; border-top-color: currentColor; border-radius: 50%; animation: spin 0.7s linear infinite; }
+    @keyframes ring-expand {
+        0% { opacity: 0; transform: scale(0.3); }
+        40% { opacity: 0.6; }
+        100% { opacity: 0; transform: scale(1.2); }
+    }
 
-  @keyframes pulse { 0%, 100% { opacity:1; } 50% { opacity:0.4; } }
-  @keyframes spin { to { transform: rotate(360deg); } }
+    /* ── Floating Particles ── */
+    .particles {
+        position: absolute;
+        width: 300px; height: 300px;
+    }
 
-  @media (max-width: 1000px) {
-    .sidebar { width: 80px; }
-        .sidebar h2, .sidebar-brand span, .sidebar-title, .nav-label, .sidebar-footer .user-info { display: none; }
-    .sidebar-brand, .sidebar-footer { justify-content: center; padding: 1.5rem 0.5rem; }
-    .nav-item { justify-content: center; padding: 1rem; }
-    .topbar { padding: 0 1.5rem; }
-    .content-wrapper { padding: 1.5rem; }
-        .app-footer { padding: 1rem 1.5rem 1.5rem; flex-direction: column; align-items: flex-start; gap: 0.6rem; }
-  }
+    .particle {
+        position: absolute;
+        width: 3px; height: 3px;
+        background: var(--accent);
+        border-radius: 50%;
+        opacity: 0;
+        box-shadow: 0 0 6px var(--accent);
+    }
+
+    .p1 { top: 0; left: 50%; animation: particle-float 2.5s ease-in-out 1.0s infinite; }
+    .p2 { top: 15%; right: 10%; animation: particle-float 2.8s ease-in-out 1.2s infinite; }
+    .p3 { bottom: 15%; right: 5%; animation: particle-float 2.2s ease-in-out 1.4s infinite; }
+    .p4 { bottom: 0; left: 50%; animation: particle-float 2.6s ease-in-out 1.1s infinite; }
+    .p5 { bottom: 15%; left: 5%; animation: particle-float 2.4s ease-in-out 1.5s infinite; }
+    .p6 { top: 15%; left: 10%; animation: particle-float 2.7s ease-in-out 1.3s infinite; }
+    .p7 { top: 30%; right: 0; animation: particle-float 2.3s ease-in-out 1.6s infinite; }
+    .p8 { top: 30%; left: 0; animation: particle-float 2.9s ease-in-out 1.0s infinite; }
+
+    @keyframes particle-float {
+        0%, 100% { opacity: 0; transform: translateY(0) scale(1); }
+        20% { opacity: 1; }
+        50% { opacity: 0.8; transform: translateY(-30px) scale(1.5); }
+        80% { opacity: 0.3; }
+    }
+
+    /* ── Clover Stage ── */
+    .clover-stage {
+        position: relative;
+        z-index: 2;
+    }
+
+    .clover-svg {
+        width: 200px;
+        height: 200px;
+        filter: drop-shadow(0 0 0px transparent);
+        animation: clover-final-glow 1s ease-in 2.2s forwards;
+    }
+
+    @keyframes clover-final-glow {
+        to {
+            filter: drop-shadow(0 0 20px rgba(230, 0, 0, 0.6))
+                    drop-shadow(0 0 60px rgba(230, 0, 0, 0.3));
+        }
+    }
+
+    /* ── Leaf Styles ── */
+    .leaf {
+        fill: #222;
+        stroke: #333;
+        stroke-width: 0.5;
+        opacity: 0;
+        transform-origin: 100px 100px;
+    }
+
+    /* 3 primeras hojas: aparecen una a una */
+    .leaf-1 {
+        animation: leaf-grow 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) 0.3s forwards;
+    }
+    .leaf-2 {
+        animation: leaf-grow 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) 0.6s forwards;
+    }
+    .leaf-3 {
+        animation: leaf-grow 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) 0.9s forwards;
+    }
+
+    /* 4ta hoja: pausa dramática, luego crece */
+    .leaf-4 {
+        animation: leaf-grow 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) 1.5s forwards;
+    }
+
+    /* 5ta hoja: la del demonio. Aparece oscura con brillo rojo */
+    .leaf-5 {
+        animation: leaf-5th-awaken 0.8s cubic-bezier(0.34, 1.56, 0.64, 1) 2.2s forwards;
+    }
+
+    @keyframes leaf-grow {
+        0% { opacity: 0; transform: scale(0) rotate(-20deg); }
+        60% { opacity: 1; transform: scale(1.1) rotate(5deg); }
+        100% { opacity: 1; transform: scale(1) rotate(0deg); fill: #333; stroke: #555; }
+    }
+
+    @keyframes leaf-5th-awaken {
+        0% { opacity: 0; transform: scale(0) rotate(-30deg); fill: #000; }
+        50% { opacity: 1; transform: scale(1.2) rotate(10deg); fill: #110000; stroke: var(--accent); }
+        100% { opacity: 1; transform: scale(1) rotate(0deg); fill: #0a0000; stroke: var(--accent); stroke-width: 1; }
+    }
+
+    /* ── Stem ── */
+    .stem {
+        stroke: #333;
+        stroke-width: 2;
+        stroke-linecap: round;
+        stroke-dasharray: 75;
+        stroke-dashoffset: 75;
+        animation: stem-draw 0.5s ease-out 0.1s forwards;
+    }
+
+    @keyframes stem-draw {
+        to { stroke-dashoffset: 0; }
+    }
+
+    /* ── Center Core ── */
+    .clover-core {
+        fill: #111;
+        opacity: 0;
+        animation: core-appear 0.3s ease 0.2s forwards, core-pulse 1.5s ease-in-out 2.2s infinite;
+    }
+
+    @keyframes core-appear {
+        to { opacity: 1; }
+    }
+
+    @keyframes core-pulse {
+        0%, 100% { fill: #111; r: 5; }
+        50% { fill: var(--accent); r: 7; filter: drop-shadow(0 0 10px var(--accent)); }
+    }
+
+    /* ── Final Transition: scale up + fade out ── */
+    .initial-loader {
+        animation: loader-exit 0.6s ease-in 3.2s forwards;
+    }
+
+    @keyframes loader-exit {
+        0% { opacity: 1; transform: scale(1); }
+        50% { opacity: 1; transform: scale(1.05); }
+        100% { opacity: 0; transform: scale(1.15); }
+    }
+
+    @media (max-width: 768px) {
+        .nav-links { display: none; }
+        .navbar { padding: 0 1rem; }
+        .nav-right { gap: 0.5rem; }
+        .clover-svg { width: 150px; height: 150px; }
+    }
 </style>
+
