@@ -35,18 +35,18 @@
     let contractAddress = '';
     let contractTokenName = '';
 
-    $: activeNetworkName = chainId ? getNetworkName(chainId) : 'DESCONECTADO';
-    $: nativeTicker = getNetworkTicker(chainId);
+    $: activeNetworkName = chainId ? getNetworkName(chainId, address) : 'DESCONECTADO';
+    $: nativeTicker = getNetworkTicker(chainId, address);
     $: nativeBalance = parseFloat(balance || '0').toFixed(6);
     $: formattedTokenBalance = parseFloat(tokenBalance || '0').toFixed(4);
 
     // Reactive Gas Estimation
-    $: if (toAddress && amount && signer) {
+    $: if (toAddress && amount && signer && chainId !== 'utxo') {
         updateGasEstimate();
     }
 
     async function updateGasEstimate() {
-        if (!signer || !toAddress || !amount || parseFloat(amount) <= 0) return;
+        if (!signer || !toAddress || !amount || parseFloat(amount) <= 0 || chainId === 'utxo') return;
         try {
             const provider = signer.provider;
             const feeData = await provider.getFeeData();
@@ -98,6 +98,12 @@
 
     async function sendTx() {
         error = ''; txHash = ''; txStatus = 'idle';
+        
+        if (chainId === 'utxo') {
+            error = 'El envío UTXO nativo debe realizarse desde Pali Wallet directamente en esta versión.';
+            return;
+        }
+
         if (!signer) { error = 'Billetera no detectada'; return; }
 
         const addrValidation = isValidChecksumAddress(toAddress);
@@ -156,7 +162,9 @@
 
     /** @param {string} addr */
     function shortAddress(addr) {
-        return addr ? addr.slice(0, 8) + '...' + addr.slice(-6) : '---';
+        if (!addr) return '---';
+        if (addr.length <= 13) return addr;
+        return addr.slice(0, 8) + '...' + addr.slice(-6);
     }
 </script>
 
@@ -177,7 +185,18 @@
                     </div>
                 </div>
                 <div class="flex flex-col gap-2">
-                    <span class="text-gray-500 text-[10px] font-black uppercase tracking-[0.2em]">Balance Nativo</span>
+                    <div class="flex items-center gap-4">
+                        <span class="text-white/50 text-[10px] font-black uppercase tracking-[0.2em]">Balance Nativo</span>
+                        <button 
+                            on:click={onTransactionConfirmed} 
+                            class="p-1.5 hover:bg-white/5 rounded-lg transition-colors group/refresh"
+                            title="Sincronizar Datos"
+                        >
+                            <svg class="w-3 h-3 text-white/40 group-hover/refresh:text-anti-accent transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                            </svg>
+                        </button>
+                    </div>
                     <div class="flex items-baseline gap-4">
                         <span class="text-5xl lg:text-7xl font-cinzel font-black text-white">{nativeBalance}</span>
                         <span class="text-xl font-black text-anti-accent tracking-widest">{nativeTicker}</span>
@@ -185,11 +204,11 @@
                 </div>
                 <div class="flex items-end justify-between">
                     <div class="flex flex-col gap-1">
-                        <span class="text-gray-600 text-[9px] font-black uppercase tracking-widest">ID de Billetera</span>
+                        <span class="text-white/40 text-[9px] font-black uppercase tracking-widest">ID de Billetera</span>
                         <div class="flex items-center gap-4">
                             <span class="text-anti-silver font-mono text-sm tracking-wider">{shortAddress(address)}</span>
                             <button on:click={copyAddress} class="p-2 bg-white/5 border border-white/10 rounded-lg hover:bg-anti-accent transition-all group/copy">
-                                <svg class="w-4 h-4 {copied ? 'text-green-500' : 'text-gray-400 group-hover/copy:text-white'}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <svg class="w-4 h-4 {copied ? 'text-green-500' : 'text-white/40 group-hover/copy:text-white'}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     {#if copied} <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
                                     {:else} <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"/> {/if}
                                 </svg>
@@ -197,7 +216,7 @@
                         </div>
                     </div>
                     <div class="text-right">
-                        <span class="block text-gray-600 text-[9px] font-black uppercase tracking-widest mb-1">Red Activa</span>
+                        <span class="block text-white/40 text-[9px] font-black uppercase tracking-widest mb-1">Red Activa</span>
                         <div class="px-4 py-1.5 bg-green-500/10 border border-green-500/30 rounded-full inline-flex items-center gap-2">
                              <div class="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></div>
                              <span class="text-[10px] font-black text-green-500 uppercase tracking-tighter">{activeNetworkName}</span>
@@ -214,20 +233,20 @@
                 <div class="w-12 h-12 bg-black rounded-2xl flex items-center justify-center border border-anti-border group-hover:border-anti-accent transition-colors">
                     <svg class="w-6 h-6 text-anti-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
                 </div>
-                <span class="text-[10px] font-black uppercase tracking-widest text-gray-500">Estimación de Gas</span>
+                <span class="text-[10px] font-black uppercase tracking-widest text-white/50">Estimación de Gas</span>
             </div>
             <div class="flex flex-col gap-4">
                 <div class="space-y-1">
-                    <span class="text-gray-600 text-[9px] font-black uppercase tracking-widest">Costo de Red</span>
+                    <span class="text-white/40 text-[9px] font-black uppercase tracking-widest">Costo de Red</span>
                     <div class="text-2xl font-cinzel font-black text-white">{parseFloat(estimatedTotalGas).toFixed(8)} <span class="text-xs text-anti-accent">{nativeTicker}</span></div>
                 </div>
                 <div class="flex gap-6 border-t border-anti-border pt-4">
                     <div class="space-y-0.5">
-                        <span class="text-[8px] font-black text-gray-600 uppercase">Gwei</span>
+                        <span class="text-[8px] font-black text-white/40 uppercase">Gwei</span>
                         <div class="text-xs font-mono text-anti-silver">{parseFloat(gasPrice || '0').toFixed(2)}</div>
                     </div>
                     <div class="space-y-0.5">
-                        <span class="text-[8px] font-black text-gray-600 uppercase">Limit</span>
+                        <span class="text-[8px] font-black text-white/40 uppercase">Limit</span>
                         <div class="text-xs font-mono text-anti-silver">{estimatedGasLimit}</div>
                     </div>
                 </div>
@@ -246,26 +265,26 @@
                 
                 <!-- Transfer Type Toggle -->
                 <div class="flex bg-black p-1 rounded-xl border border-anti-border">
-                    <button on:click={() => transferType = 'native'} class="px-4 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all {transferType === 'native' ? 'bg-anti-accent text-white shadow-lg' : 'text-gray-600 hover:text-white'}">NATIVO</button>
-                    <button on:click={() => transferType = 'contract'} class="px-4 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all {transferType === 'contract' ? 'bg-anti-accent text-white shadow-lg' : 'text-gray-600 hover:text-white'}">CONTRATO</button>
+                    <button on:click={() => transferType = 'native'} class="px-4 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all {transferType === 'native' ? 'bg-anti-accent text-white shadow-lg' : 'text-white/40 hover:text-white'}">NATIVO</button>
+                    <button on:click={() => transferType = 'contract'} class="px-4 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all {transferType === 'contract' ? 'bg-anti-accent text-white shadow-lg' : 'text-white/40 hover:text-white'}">CONTRATO</button>
                 </div>
             </div>
 
             <div class="space-y-6">
                 {#if transferType === 'contract'}
                     <div class="space-y-3" transition:slide>
-                        <label for="contractAddress" class="text-[10px] font-black uppercase tracking-widest text-gray-500 ml-4">Dirección del Contrato (ERC20)</label>
-                        <input id="contractAddress" type="text" bind:value={contractAddress} placeholder="0x... (Contrato del Token)" class="w-full bg-black border border-anti-border rounded-2xl px-6 py-4 text-white placeholder:text-gray-700 focus:border-anti-accent focus:ring-4 focus:ring-anti-accent/10 outline-none transition-all font-mono text-sm" />
+                        <label for="contractAddress" class="text-[10px] font-black uppercase tracking-widest text-white/50 ml-4">Dirección del Contrato (ERC20)</label>
+                        <input id="contractAddress" type="text" bind:value={contractAddress} placeholder="0x... (Contrato del Token)" class="w-full bg-black border border-anti-border rounded-2xl px-6 py-4 text-white placeholder:text-white/20 focus:border-anti-accent focus:ring-4 focus:ring-anti-accent/10 outline-none transition-all font-mono text-sm" />
                     </div>
                 {/if}
 
                 <div class="space-y-3">
-                    <label for="toAddress" class="text-[10px] font-black uppercase tracking-widest text-gray-500 ml-4">Dirección de Destino (Cuenta)</label>
-                    <input id="toAddress" type="text" bind:value={toAddress} placeholder="0x... (Cuenta del Receptor)" class="w-full bg-black border border-anti-border rounded-2xl px-6 py-4 text-white placeholder:text-gray-700 focus:border-anti-accent focus:ring-4 focus:ring-anti-accent/10 outline-none transition-all font-mono text-sm" />
+                    <label for="toAddress" class="text-[10px] font-black uppercase tracking-widest text-white/50 ml-4">Dirección de Destino (Cuenta)</label>
+                    <input id="toAddress" type="text" bind:value={toAddress} placeholder="0x... (Cuenta del Receptor)" class="w-full bg-black border border-anti-border rounded-2xl px-6 py-4 text-white placeholder:text-white/20 focus:border-anti-accent focus:ring-4 focus:ring-anti-accent/10 outline-none transition-all font-mono text-sm" />
                 </div>
 
                 <div class="space-y-3">
-                    <label for="amount" class="text-[10px] font-black uppercase tracking-widest text-gray-500 ml-4">Monto a Enviar</label>
+                    <label for="amount" class="text-[10px] font-black uppercase tracking-widest text-white/50 ml-4">Monto a Enviar</label>
                     <div class="relative">
                         <input id="amount" type="number" bind:value={amount} placeholder="0.00" class="w-full bg-black border border-anti-border rounded-2xl px-6 py-5 text-white focus:border-anti-accent focus:ring-4 focus:ring-anti-accent/10 outline-none transition-all font-mono text-2xl" />
                         <div class="absolute right-6 top-1/2 -translate-y-1/2 text-anti-accent font-black tracking-widest">{transferType === 'native' ? nativeTicker : 'TOKENS'}</div>
@@ -280,7 +299,7 @@
                     <div class="p-5 bg-green-900/10 border border-green-500/30 rounded-2xl flex items-center justify-between" transition:slide>
                         <div>
                             <span class="block text-[10px] font-black text-green-500 uppercase">Transacción Exitosa</span>
-                            <span class="text-[9px] text-gray-500 font-mono">{txHash.slice(0, 20)}...</span>
+                            <span class="text-[9px] text-white/40 font-mono">{txHash.slice(0, 20)}...</span>
                         </div>
                         <a href="{getExplorerBase(chainId)}{txHash}" target="_blank" class="px-5 py-2.5 bg-green-500 text-black rounded-xl text-[10px] font-black uppercase tracking-widest hover:scale-105 transition-transform">Ver Detalle</a>
                     </div>
@@ -323,7 +342,7 @@
                                     <div class="text-xs font-black text-white uppercase tracking-widest">
                                         {tx.type}
                                     </div>
-                                    <div class="text-[10px] text-gray-600 font-mono">{new Date(tx.timestamp).toLocaleString()}</div>
+                                    <div class="text-[10px] text-white/40 font-mono">{new Date(tx.timestamp).toLocaleString()}</div>
                                 </div>
                             </div>
                             <div class="flex items-center gap-6">
@@ -331,10 +350,10 @@
                                     <div class="text-lg font-black font-cinzel {tx.type === 'Received' || tx.type === 'Recibido' ? 'text-green-500' : 'text-white'}">
                                         {tx.type === 'Received' || tx.type === 'Recibido' ? '+' : '-'}{parseFloat(tx.amount).toFixed(4)}
                                     </div>
-                                    <div class="text-[10px] text-gray-600 font-black uppercase">{tx.assetSymbol || nativeTicker}</div>
+                                    <div class="text-[10px] text-white/40 font-black uppercase">{tx.assetSymbol || nativeTicker}</div>
                                 </div>
                                 <div class="p-2 bg-white/5 rounded-lg group-hover:bg-anti-accent transition-colors">
-                                    <svg class="w-4 h-4 text-gray-600 group-hover:text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <svg class="w-4 h-4 text-white/40 group-hover:text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/>
                                     </svg>
                                 </div>

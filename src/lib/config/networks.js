@@ -1,3 +1,4 @@
+// @ts-nocheck
 export const UTXO_NETWORKS = [
     {
         id: 'bitcoin',
@@ -44,7 +45,8 @@ export const EVM_NETWORKS = [
         explorer: 'https://explorer.rollux.com',
         nativeCurrencyName: 'Syscoin',
         iconText: 'R',
-        tone: 'lime'
+        tone: 'lime',
+        apiUrl: 'https://explorer.rollux.com/api'
     },
     {
         id: '57',
@@ -56,7 +58,8 @@ export const EVM_NETWORKS = [
         explorer: 'https://explorer.syscoin.org',
         nativeCurrencyName: 'Syscoin',
         iconText: 'S',
-        tone: 'cyan'
+        tone: 'cyan',
+        apiUrl: 'https://explorer.syscoin.org/api'
     },
     {
         id: '1',
@@ -94,7 +97,8 @@ export const EVM_NETWORKS = [
         explorer: 'https://tanenbaum.io',
         nativeCurrencyName: 'Test Syscoin',
         iconText: 'S',
-        tone: 'sky'
+        tone: 'sky',
+        apiUrl: 'https://tanenbaum.io/api'
     },
     {
         id: '57057',
@@ -102,11 +106,12 @@ export const EVM_NETWORKS = [
         category: 'EVM Networks',
         chainHex: '0xdee1',
         rpc: 'https://rpc-zk.tanenbaum.io',
-        ticker: 'TSYS',
+        ticker: 'tSYS',
         explorer: 'https://explorer-zk.tanenbaum.io',
         nativeCurrencyName: 'Tanenbaum SYS',
         iconText: 'ZK',
-        tone: 'pink'
+        tone: 'pink',
+        apiUrl: 'https://explorer-zk.tanenbaum.io/api'
     },
     {
         id: '57042',
@@ -125,12 +130,13 @@ export const EVM_NETWORKS = [
         name: 'Rollux Testnet',
         category: 'EVM Networks',
         chainHex: '0xdea8',
-        rpc: 'https://rpc-tanenbaum.rollux.com',
+        rpc: 'https://rpc-testnet.rollux.com',
         ticker: 'tSYS',
         explorer: 'https://rollux.tanenbaum.io',
         nativeCurrencyName: 'Test Syscoin',
         iconText: 'RT',
-        tone: 'blue'
+        tone: 'blue',
+        apiUrl: 'https://rollux.tanenbaum.io/api'
     },
     {
         id: '11155111',
@@ -250,13 +256,32 @@ export function getEvmNetwork(id) {
     return EVM_NETWORKS.find((network) => network.id === String(id));
 }
 
+
 /** @param {string|number} id */
-export function getNetworkName(id) {
+/** @param {string} address */
+export function getNetworkName(id, address = '') {
+    if (id === 'utxo') {
+        if (!address) return 'Pali UTXO';
+        const addr = address.toLowerCase();
+        if (addr.startsWith('sys') || addr.startsWith('tsys')) {
+            return addr.startsWith('tsys') ? 'Syscoin Testnet' : 'Syscoin Mainnet';
+        }
+        if (addr.startsWith('bc1') || /^[13]/.test(address)) return 'Bitcoin';
+        return 'UTXO Network';
+    }
     return getEvmNetwork(id)?.name || `Chain ID ${id}`;
 }
 
 /** @param {string|number} id */
-export function getNetworkTicker(id) {
+/** @param {string} address */
+export function getNetworkTicker(id, address = '') {
+    if (id === 'utxo') {
+        if (!address) return 'SYS';
+        const addr = address.toLowerCase();
+        if (addr.startsWith('sys') || addr.startsWith('tsys')) return addr.startsWith('tsys') ? 'tSYS' : 'SYS';
+        if (addr.startsWith('bc1') || /^[13]/.test(address)) return 'BTC';
+        return 'SYS';
+    }
     return getEvmNetwork(id)?.ticker || 'ETH';
 }
 

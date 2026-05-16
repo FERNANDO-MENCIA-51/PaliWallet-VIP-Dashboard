@@ -18,6 +18,60 @@
 
     let filter = 'visibles'; // 'visibles' | 'ocultas' | 'todas'
 
+    // Modal State
+    let showModal = false;
+    let modalConfig = {
+        title: '',
+        message: '',
+        confirmText: '',
+        action: () => {}
+    };
+
+    /** @param {any} net */
+    function confirmSwitch(net) {
+        modalConfig = {
+            title: 'Confirmar Cambio de Red',
+            message: `¿Deseas sincronizar el terminal con la red ${net.name}?`,
+            confirmText: 'Sincronizar Protocolo',
+            action: () => {
+                onSwitch(net);
+                showModal = false;
+            }
+        };
+        showModal = true;
+    }
+
+    /** @param {any} net */
+    function confirmSwitchUtxo(net) {
+        modalConfig = {
+            title: '⚠ Cambio de Proveedor (UTXO)',
+            message: `Estás a punto de cambiar al proveedor nativo de ${net.name}. La conexión EVM se pausará temporalmente. ¿Deseas continuar?`,
+            confirmText: 'Cambiar a Protocolo UTXO',
+            action: () => {
+                onSwitchUtxo(net);
+                showModal = false;
+            }
+        };
+        showModal = true;
+    }
+
+    /** @param {string} id */
+    function confirmToggle(id) {
+        const isHidden = hiddenNetworks.includes(id);
+        modalConfig = {
+            title: isHidden ? 'Vincular Red' : 'Retirar Red',
+            message: isHidden 
+                ? '¿Quieres volver a vincular esta red al terminal?' 
+                : '¿Seguro que quieres retirar esta red? Se eliminará de tu terminal pero seguirá disponible en Pali Wallet.',
+            confirmText: isHidden ? 'Vincular' : 'Retirar Protocolo',
+            action: () => {
+                onToggleHide(id);
+                showModal = false;
+            }
+        };
+        showModal = true;
+    }
+
     $: filteredEvm = evmNetworks.filter(net => {
         const isHidden = hiddenNetworks.includes(net.id);
         if (filter === 'visibles') return !isHidden;
@@ -31,13 +85,13 @@
     <header class="flex flex-col md:flex-row md:items-end justify-between gap-6">
         <div class="flex flex-col gap-4">
             <h2 class="font-cinzel text-4xl font-black text-white uppercase tracking-tight">Gestión de Redes</h2>
-            <p class="text-gray-500 max-w-xl">Personaliza tu terminal activando o desactivando protocolos. Las redes ocultas no aparecerán en el selector rápido.</p>
+            <p class="text-gray-500 max-xl">Administra los protocolos vinculados a este terminal. Puedes **retirar o eliminar** redes para simplificar tu flujo de trabajo.</p>
         </div>
 
         <!-- Filter Controls -->
         <div class="flex bg-black/40 border border-anti-border p-1 rounded-2xl">
-            <button on:click={() => filter = 'visibles'} class="px-6 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all {filter === 'visibles' ? 'bg-anti-accent text-white shadow-lg' : 'text-gray-500 hover:text-white'}">Visibles</button>
-            <button on:click={() => filter = 'ocultas'} class="px-6 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all {filter === 'ocultas' ? 'bg-anti-accent text-white shadow-lg' : 'text-gray-500 hover:text-white'}">Ocultas ({hiddenNetworks.length})</button>
+            <button on:click={() => filter = 'visibles'} class="px-6 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all {filter === 'visibles' ? 'bg-anti-accent text-white shadow-lg' : 'text-gray-500 hover:text-white'}">Activas</button>
+            <button on:click={() => filter = 'ocultas'} class="px-6 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all {filter === 'ocultas' ? 'bg-anti-accent text-white shadow-lg' : 'text-gray-500 hover:text-white'}">Eliminadas ({hiddenNetworks.length})</button>
             <button on:click={() => filter = 'todas'} class="px-6 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all {filter === 'todas' ? 'bg-anti-accent text-white shadow-lg' : 'text-gray-500 hover:text-white'}">Todas</button>
         </div>
     </header>
@@ -83,14 +137,20 @@
                             </div>
                             <div class="flex justify-between text-[10px] font-bold uppercase tracking-widest">
                                 <span class="text-gray-600">Estado:</span>
-                                <span class={isHidden ? 'text-red-500' : 'text-green-500'}>{isHidden ? 'DESACTIVADO' : 'VISIBLE'}</span>
+                                <span class="{isHidden ? 'text-red-500' : 'text-green-500'}">{isHidden ? 'RETIRADO' : 'CONECTADO'}</span>
                             </div>
                         </div>
 
                         <div class="flex gap-2 mt-2">
-                            <button on:click={() => onSwitch(net)} class="flex-1 py-3 bg-white text-black font-black font-cinzel text-xs rounded-xl hover:bg-anti-accent hover:text-white transition-all">{isHidden ? 'ACTIVAR Y CAMBIAR' : 'CAMBIAR'}</button>
-                            <button on:click={() => onToggleHide(net.id)} class="px-4 py-3 border border-anti-border rounded-xl transition-all {isHidden ? 'bg-green-500/10 hover:border-green-500/50' : 'hover:bg-red-900/10 hover:border-red-500/50'}" title={isHidden ? 'Restaurar Red' : 'Desactivar Red'}>
-                                <svg class="w-5 h-5 {isHidden ? 'text-green-500' : 'text-red-500'}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d={isHidden ? "M12 4v16m8-8H4" : "M6 18L18 6M6 6l12 12"}/></svg>
+                            <button on:click={() => confirmSwitch(net)} class="flex-1 py-3 bg-white text-black font-black font-cinzel text-xs rounded-xl hover:bg-anti-accent hover:text-white transition-all">{isHidden ? 'VINCULAR Y CAMBIAR' : 'CAMBIAR'}</button>
+                            <button on:click={() => confirmToggle(net.id)} class="px-4 py-3 border border-anti-border rounded-xl transition-all {isHidden ? 'bg-green-500/10 hover:border-green-500/50' : 'hover:bg-red-900/10 hover:border-red-500/50'}" title="{isHidden ? 'Vincular Red' : 'Retirar Red'}">
+                                <svg class="w-5 h-5 {isHidden ? 'text-green-500' : 'text-red-500'}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    {#if isHidden}
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+                                    {:else}
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                                    {/if}
+                                </svg>
                             </button>
                         </div>
                     </div>
@@ -107,7 +167,7 @@
     <section class="space-y-8 mt-10">
         <div class="flex items-center gap-4">
             <div class="h-px flex-1 bg-anti-border"></div>
-            <span class="text-[10px] font-black uppercase tracking-[0.5em] text-gray-600">Protocolos UTXO (Nativos)</span>
+            <span class="text-[10px] font-black uppercase tracking-[0.5em] text-white/40">Protocolos UTXO (Nativos)</span>
             <div class="h-px flex-1 bg-anti-border"></div>
         </div>
 
@@ -115,16 +175,16 @@
             {#each utxoNetworks as net}
                 <div class="bg-black/40 border border-anti-border rounded-3xl p-8 flex flex-col gap-6 group hover:border-anti-accent transition-all">
                     <div class="flex items-center gap-5">
-                        <div class="w-14 h-14 bg-gray-900 rounded-2xl flex items-center justify-center border border-anti-border font-cinzel text-xl font-black text-gray-500 group-hover:text-anti-accent transition-colors">
+                        <div class="w-14 h-14 bg-gray-900 rounded-2xl flex items-center justify-center border border-anti-border font-cinzel text-xl font-black text-white/40 group-hover:text-anti-accent transition-colors">
                             {net.iconText || net.name[0]}
                         </div>
                         <div>
                             <h3 class="text-gray-400 font-bold group-hover:text-white transition-colors">{net.name}</h3>
-                            <p class="text-[10px] text-gray-600 font-mono tracking-tighter uppercase">Protocolo Nativo</p>
+                            <p class="text-[10px] text-white/40 font-mono tracking-tighter uppercase">Protocolo Nativo</p>
                         </div>
                     </div>
-                    <p class="text-[11px] text-gray-700 italic leading-relaxed">{net.note}</p>
-                    <button on:click={() => onSwitchUtxo(net)} class="w-full py-3 bg-white text-black font-black font-cinzel text-[10px] rounded-xl hover:bg-anti-accent hover:text-white transition-all uppercase tracking-widest">
+                    <p class="text-[11px] text-white/50 italic leading-relaxed">{net.note}</p>
+                    <button on:click={() => confirmSwitchUtxo(net)} class="w-full py-3 bg-white text-black font-black font-cinzel text-[10px] rounded-xl hover:bg-anti-accent hover:text-white transition-all uppercase tracking-widest">
                         CAMBIAR A {net.symbol}
                     </button>
                 </div>
@@ -133,9 +193,37 @@
     </section>
 
     <footer class="mt-10 p-6 bg-red-900/5 border border-red-900/20 rounded-2xl">
-        <p class="text-[10px] text-gray-600 font-mono italic flex gap-3">
+        <p class="text-[10px] text-white/40 font-mono italic flex gap-3">
             <span class="text-red-500 font-bold">NOTA SEGURIDAD:</span>
             Para eliminar una red permanentemente de Pali Wallet, debes hacerlo manualmente desde la configuración de la extensión. El Terminal solo gestiona la visibilidad y conexión del DApp.
         </p>
     </footer>
+
+    <!-- MODAL DE CONFIRMACIÓN VIP -->
+    {#if showModal}
+        <div class="fixed inset-0 z-100 flex items-center justify-center p-6 bg-black/80 backdrop-blur-sm" transition:fade>
+            <div class="bg-anti-surface border border-anti-border w-full max-w-lg rounded-[2.5rem] p-10 shadow-[0_0_100px_rgba(230,0,0,0.1)] relative overflow-hidden" in:slide>
+                <!-- Shimmer Background -->
+                <div class="absolute -top-24 -left-24 w-48 h-48 bg-anti-accent opacity-5 blur-[100px]"></div>
+                
+                <h3 class="font-cinzel text-3xl font-black text-white mb-6 uppercase tracking-tight">{modalConfig.title}</h3>
+                <p class="text-gray-400 mb-10 leading-relaxed text-sm">{modalConfig.message}</p>
+                
+                <div class="flex flex-col sm:flex-row gap-4">
+                    <button 
+                        on:click={modalConfig.action}
+                        class="flex-1 py-4 bg-anti-accent text-white font-black font-cinzel text-xs rounded-2xl hover:scale-[1.02] transition-all shadow-lg"
+                    >
+                        {modalConfig.confirmText}
+                    </button>
+                    <button 
+                        on:click={() => showModal = false}
+                        class="flex-1 py-4 bg-black/50 border border-anti-border text-gray-400 font-black font-cinzel text-xs rounded-2xl hover:bg-white/5 transition-all"
+                    >
+                        CANCELAR
+                    </button>
+                </div>
+            </div>
+        </div>
+    {/if}
 </div>

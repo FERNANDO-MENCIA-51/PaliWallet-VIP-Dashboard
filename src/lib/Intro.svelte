@@ -50,7 +50,7 @@
             <span class="text-anti-accent drop-shadow-[0_0_25px_rgba(230,0,0,0.5)]">SIN LÍMITES</span>
         </h1>
 
-        <p class="stagger-box text-gray-400 text-lg md:text-xl max-w-2xl leading-relaxed font-sans">
+        <p class="stagger-box text-white/60 text-lg md:text-xl max-w-2xl leading-relaxed font-sans">
             Fernando Dev Terminal es la plataforma definitiva para la gestión de activos digitales. Operaciones transparentes, seguras y sin intermediarios.
         </p>
 
@@ -73,7 +73,7 @@
                     <svg class="w-7 h-7 text-anti-accent group-hover:text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d={feature.icon}/></svg>
                 </div>
                 <h3 class="font-cinzel text-xl font-bold text-white mb-4">{feature.title}</h3>
-                <p class="text-gray-500 text-sm leading-relaxed">{feature.desc}</p>
+                <p class="text-white/50 text-sm leading-relaxed">{feature.desc}</p>
             </div>
         {/each}
     </section>
@@ -88,21 +88,21 @@
                         <div class="shrink-0 w-10 h-10 rounded-full bg-anti-accent flex items-center justify-center font-black">1</div>
                         <div>
                             <h4 class="text-white font-bold mb-1">Conexión Segura</h4>
-                            <p class="text-gray-400 text-sm">Vincula tu Pali Wallet con un solo clic. Tu seguridad es nuestra prioridad.</p>
+                            <p class="text-white/50 text-sm">Vincula tu Pali Wallet con un solo clic. Tu seguridad es nuestra prioridad.</p>
                         </div>
                     </div>
                     <div class="flex gap-6">
                         <div class="shrink-0 w-10 h-10 rounded-full bg-anti-border border border-anti-accent flex items-center justify-center font-black">2</div>
                         <div>
                             <h4 class="text-white font-bold mb-1">Análisis de Cartera</h4>
-                            <p class="text-gray-400 text-sm">Visualiza tus activos en tiempo real a través de múltiples redes y protocolos.</p>
+                            <p class="text-white/50 text-sm">Visualiza tus activos en tiempo real a través de múltiples redes y protocolos.</p>
                         </div>
                     </div>
                     <div class="flex gap-6">
                         <div class="shrink-0 w-10 h-10 rounded-full bg-anti-border border border-anti-accent flex items-center justify-center font-black">3</div>
                         <div>
                             <h4 class="text-white font-bold mb-1">Ejecución Directa</h4>
-                            <p class="text-gray-400 text-sm">Envía y recibe activos con la mayor eficiencia del mercado blockchain.</p>
+                            <p class="text-white/50 text-sm">Envía y recibe activos con la mayor eficiencia del mercado blockchain.</p>
                         </div>
                     </div>
                 </div>
