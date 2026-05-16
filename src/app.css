@@ -1,94 +1,29 @@
-@import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap');
+@import "tailwindcss";
 
-:root {
-  /* Anti-Magic / Asta Transformation Theme */
-  --bg: #000000;
-  --surface: #0d0d0d;
-  --surface-soft: #161616;
-  --border-color: #252525;
-  --text-primary: #f0f0f0;
-  --text-secondary: #b0b0b0;
-  --accent: #e60000; /* Demonic Red */
-  --accent-2: #d0d0d0; /* Metallic Silver */
-  --accent-dark: #900000;
-  --warning: #ff4400;
-  --error: #ff0000;
-  --success: #00ff00;
-
-  --bg-dark: var(--bg);
-  --panel: var(--surface);
-  --border: var(--border-color);
-  --text: var(--text-primary);
-  --muted: var(--text-secondary);
-  --platinum: var(--text-primary);
-  --good: var(--success);
-  --bad: var(--error);
+@theme {
+  --color-anti-bg: #0a0a0a;
+  --color-anti-surface: #121212;
+  --color-anti-accent: #e60000;
+  --color-anti-silver: #c0c0c0;
+  --color-anti-border: #2a2a2a;
+  
+  --font-cinzel: "Cinzel", serif;
 }
 
-@keyframes asta-aura-pulse {
-  0% { box-shadow: 0 0 10px rgba(230, 0, 0, 0.1); }
-  50% { box-shadow: 0 0 25px rgba(230, 0, 0, 0.3); }
-  100% { box-shadow: 0 0 10px rgba(230, 0, 0, 0.1); }
+@layer base {
+  body {
+    @apply bg-anti-bg text-gray-100 font-sans;
+  }
 }
 
-@keyframes anti-magic-flow {
-  0% { background-position: 0% 50%; }
-  50% { background-position: 100% 50%; }
-  100% { background-position: 0% 50%; }
+.glow-red {
+  box-shadow: 0 0 15px rgba(230, 0, 0, 0.4);
 }
 
-.asta-aura {
-  background: linear-gradient(270deg, #000000, #0a0000, #000000);
-  background-size: 400% 400%;
-  animation: anti-magic-flow 10s ease infinite;
-  position: relative;
+.glow-silver {
+  box-shadow: 0 0 15px rgba(192, 192, 192, 0.2);
 }
 
-.asta-aura::after {
-  content: '';
-  position: absolute;
-  top: 0; left: 0; right: 0; bottom: 0;
-  background: radial-gradient(circle at 50% 50%, rgba(230, 0, 0, 0.05) 0%, transparent 70%);
-  pointer-events: none;
-  z-index: 0;
-}
-
-.clover-spin {
-  filter: drop-shadow(0 0 5px var(--accent));
-  animation: asta-aura-pulse 2s infinite ease-in-out;
-}
-
-* {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
-}
-
-body {
-  font-family: 'Inter', system-ui, sans-serif;
-  background-color: var(--bg);
-  color: var(--text-primary);
-  overflow-x: hidden;
-}
-
-h1, h2, h3, h4, .cinzel {
-  font-family: 'Cinzel', serif;
-  letter-spacing: 0.05em;
-}
-
-::-webkit-scrollbar {
-  width: 6px;
-}
-
-::-webkit-scrollbar-track {
-  background: var(--bg);
-}
-
-::-webkit-scrollbar-thumb {
-  background: var(--border-color);
-  border-radius: 10px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: var(--accent);
+.text-gradient-red {
+  @apply bg-clip-text text-transparent bg-linear-to-r from-red-600 to-red-900;
 }

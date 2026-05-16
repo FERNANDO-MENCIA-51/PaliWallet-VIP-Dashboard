@@ -1,21 +1,20 @@
 <script>
-    import { fade } from 'svelte/transition';
+    import { fade, slide } from 'svelte/transition';
     import { ethers } from 'ethers';
-    import { getExplorerBase, getNetworkName, getNetworkTicker, SUPPORTED_EVM_CHAIN_IDS } from './config/networks.js';
-    import { isValidChecksumAddress, isValidEthereumAddress, parseTransactionError } from '../composables/address.js';
+    import { getExplorerBase, getNetworkName, getNetworkTicker } from './config/networks.js';
+    import { isValidChecksumAddress, parseTransactionError } from '../composables/address.js';
+    import { onMount } from 'svelte';
 
     export let balance = '';
     export let address = '';
     export let chainId = '';
     export let tokenBalance = '';
-    export let tokenSymbol = 'TSYS';
     /** @type {any[]} */
     export let history = [];
+    export let historyLoading = false;
     /** @type {any} */
     export let signer = null;
-    export let connected = false;
 
-    /** @type {() => void} */
     export let onTransactionConfirmed = () => {};
     /** @type {(tx: any) => void} */
     export let onNewTransaction = (tx) => {};
@@ -27,58 +26,126 @@
     let txHash = '';
     let error = '';
     let txStatus = 'idle';
-    let confirmations = 0;
+    let gasPrice = '';
+    let estimatedGasLimit = '21000';
+    let estimatedTotalGas = '0';
 
-    $: activeNetworkName = chainId ? getNetworkName(chainId) : 'No conectada';
+    // Contract Interaction States
+    let transferType = 'native'; // 'native' | 'contract'
+    let contractAddress = '';
+    let contractTokenName = '';
+
+    $: activeNetworkName = chainId ? getNetworkName(chainId) : 'DESCONECTADO';
     $: nativeTicker = getNetworkTicker(chainId);
     $: nativeBalance = parseFloat(balance || '0').toFixed(6);
     $: formattedTokenBalance = parseFloat(tokenBalance || '0').toFixed(4);
 
-    /** @param {string} addr */
-    function shortAddress(addr) {
-        return addr ? addr.slice(0, 6) + '...' + addr.slice(-4) : '';
+    // Reactive Gas Estimation
+    $: if (toAddress && amount && signer) {
+        updateGasEstimate();
+    }
+
+    async function updateGasEstimate() {
+        if (!signer || !toAddress || !amount || parseFloat(amount) <= 0) return;
+        try {
+            const provider = signer.provider;
+            const feeData = await provider.getFeeData();
+            gasPrice = ethers.formatUnits(feeData.gasPrice || 0n, 'gwei');
+            
+            const addrValidation = isValidChecksumAddress(toAddress);
+            if (addrValidation.valid) {
+                let estimate;
+                if (transferType === 'native') {
+                    estimate = await signer.estimateGas({
+                        to: toAddress,
+                        value: ethers.parseEther(amount.toString())
+                    });
+                } else if (isValidChecksumAddress(contractAddress).valid) {
+                    const contract = new ethers.Contract(contractAddress, ["function transfer(address,uint256) public returns(bool)"], signer);
+                    estimate = await contract.transfer.estimateGas(toAddress, ethers.parseUnits(amount.toString(), 18));
+                } else {
+                    estimate = 21000n;
+                }
+                
+                estimatedGasLimit = estimate.toString();
+                const total = (feeData.gasPrice || 0n) * estimate;
+                estimatedTotalGas = ethers.formatEther(total);
+            }
+        } catch (err) {
+            console.warn("Gas estimate failed", err);
+        }
     }
 
     async function copyAddress() {
         if (!address) return;
-        await navigator.clipboard.writeText(address);
-        copied = true;
-        setTimeout(() => copied = false, 2000);
+        try {
+            if (navigator.clipboard && window.isSecureContext) {
+                await navigator.clipboard.writeText(address);
+            } else {
+                const textArea = document.createElement("textarea");
+                textArea.value = address;
+                document.body.appendChild(textArea);
+                textArea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textArea);
+            }
+            copied = true;
+            setTimeout(() => copied = false, 2000);
+        } catch (err) {
+            console.error('Fallback copy failed', err);
+        }
     }
 
     async function sendTx() {
-        error = ''; txHash = ''; txStatus = 'idle'; confirmations = 0;
-        if (!signer) { error = 'Billetera no conectada.'; return; }
+        error = ''; txHash = ''; txStatus = 'idle';
+        if (!signer) { error = 'Billetera no detectada'; return; }
 
         const addrValidation = isValidChecksumAddress(toAddress);
-        if (!addrValidation.valid) { error = 'Dirección inválida.'; return; }
-        if (addrValidation.suggestion && addrValidation.suggestion !== toAddress) toAddress = addrValidation.suggestion;
+        if (!addrValidation.valid) { error = 'Dirección de destino inválida'; return; }
 
-        if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) { error = 'Monto inválido.'; return; }
-
+        if (transferType === 'contract' && !isValidChecksumAddress(contractAddress).valid) {
+            error = 'Dirección de contrato inválida'; return;
+        }
+        
         try {
             loading = true;
             txStatus = 'pending';
-            const parsedAmount = ethers.parseEther(amount.toString());
-            const tx = await signer.sendTransaction({ to: toAddress, value: parsedAmount });
+            
+            let tx;
+            if (transferType === 'native') {
+                tx = await signer.sendTransaction({ 
+                    to: toAddress, 
+                    value: ethers.parseEther(amount.toString()) 
+                });
+            } else {
+                // ERC20 Contract Transfer
+                const contract = new ethers.Contract(
+                    contractAddress, 
+                    ["function transfer(address to, uint256 amount) public returns (bool)", "function symbol() view returns (string)"], 
+                    signer
+                );
+                
+                let symbol = 'TOKEN';
+                try { symbol = await contract.symbol(); } catch(e) {}
+                
+                tx = await contract.transfer(toAddress, ethers.parseUnits(amount.toString(), 18));
+                contractTokenName = symbol;
+            }
+
             txHash = tx.hash;
             txStatus = 'sent';
             
             onNewTransaction({
-                hash: tx.hash,
-                to: toAddress,
-                amount: amount,
-                type: 'Sent',
-                timestamp: new Date().toISOString(),
-                status: 'Confirmed'
+                hash: tx.hash, to: toAddress, amount: amount, 
+                type: transferType === 'native' ? 'Sent' : 'Contract Call',
+                timestamp: new Date().toISOString(), status: 'Confirmed',
+                assetSymbol: transferType === 'native' ? nativeTicker : contractTokenName
             });
 
-            const receipt = await tx.wait(1); 
-            confirmations = receipt?.confirmations || 1;
+            await tx.wait(1); 
             txStatus = 'confirmed';
             onTransactionConfirmed();
-            amount = '';
-            toAddress = '';
+            amount = ''; toAddress = '';
         } catch (err) {
             error = parseTransactionError(err);
             txStatus = 'error';
@@ -86,479 +153,208 @@
             loading = false;
         }
     }
+
+    /** @param {string} addr */
+    function shortAddress(addr) {
+        return addr ? addr.slice(0, 8) + '...' + addr.slice(-6) : '---';
+    }
 </script>
 
-<div class="dash-container" in:fade={{ duration: 400 }}>
-    <header class="dash-header">
-        <h2 class="cinzel">CENTRO DE OPERACIONES</h2>
-        <p>Gestión de activos y transacciones en el Ecosistema de Redes.</p>
-    </header>
+<div class="grid grid-cols-1 lg:grid-cols-12 gap-8" in:fade>
+    
+    <!-- VIP SECTION -->
+    <div class="lg:col-span-12 grid grid-cols-1 lg:grid-cols-3 gap-8 items-stretch">
+        <div class="lg:col-span-2 relative overflow-hidden rounded-[2.5rem] bg-linear-to-br from-[#1a1a1a] to-[#000000] border border-white/10 p-10 shadow-2xl group">
+            <div class="absolute top-0 right-0 w-64 h-64 bg-anti-accent/10 blur-[100px] rounded-full -mr-20 -mt-20"></div>
+            <div class="relative h-full flex flex-col justify-between gap-12">
+                <div class="flex justify-between items-start">
+                    <div class="flex flex-col gap-1">
+                        <span class="text-anti-accent font-black tracking-[0.3em] text-[10px] uppercase">Fernando Dev VIP Member</span>
+                        <h2 class="text-white font-cinzel text-3xl font-black tracking-tight">PREMIUM TERMINAL</h2>
+                    </div>
+                    <div class="w-12 h-12 bg-white/5 rounded-2xl flex items-center justify-center border border-white/10">
+                         <svg class="w-6 h-6 text-anti-accent" fill="currentColor" viewBox="0 0 20 20"><path d="M11 3a1 1 0 10-2 0v1a1 1 0 102 0V3zM15.657 5.757a1 1 0 00-1.414-1.414l-.707.707a1 1 0 001.414 1.414l.707-.707zM18 10a1 1 0 01-1 1h-1a1 1 0 110-2h1a1 1 0 011 1zM5.05 6.464A1 1 0 106.464 5.05l-.707-.707a1 1 0 00-1.414 1.414l.707.707zM5 10a1 1 0 01-1 1H3a1 1 0 110-2h1a1 1 0 011 1zM8 16v-1h4v1a2 2 0 11-4 0zM12 14c.015-.34.208-.646.477-.859a4 4 0 10-4.954 0c.27.213.462.519.477.859h4z"></path></svg>
+                    </div>
+                </div>
+                <div class="flex flex-col gap-2">
+                    <span class="text-gray-500 text-[10px] font-black uppercase tracking-[0.2em]">Balance Nativo</span>
+                    <div class="flex items-baseline gap-4">
+                        <span class="text-5xl lg:text-7xl font-cinzel font-black text-white">{nativeBalance}</span>
+                        <span class="text-xl font-black text-anti-accent tracking-widest">{nativeTicker}</span>
+                    </div>
+                </div>
+                <div class="flex items-end justify-between">
+                    <div class="flex flex-col gap-1">
+                        <span class="text-gray-600 text-[9px] font-black uppercase tracking-widest">ID de Billetera</span>
+                        <div class="flex items-center gap-4">
+                            <span class="text-anti-silver font-mono text-sm tracking-wider">{shortAddress(address)}</span>
+                            <button on:click={copyAddress} class="p-2 bg-white/5 border border-white/10 rounded-lg hover:bg-anti-accent transition-all group/copy">
+                                <svg class="w-4 h-4 {copied ? 'text-green-500' : 'text-gray-400 group-hover/copy:text-white'}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    {#if copied} <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                                    {:else} <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"/> {/if}
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="text-right">
+                        <span class="block text-gray-600 text-[9px] font-black uppercase tracking-widest mb-1">Red Activa</span>
+                        <div class="px-4 py-1.5 bg-green-500/10 border border-green-500/30 rounded-full inline-flex items-center gap-2">
+                             <div class="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></div>
+                             <span class="text-[10px] font-black text-green-500 uppercase tracking-tighter">{activeNetworkName}</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
 
-    <!-- Tarjeta de Crédito Estilo Asta -->
-    <div class="card-section">
-        <div class="credit-card">
-            <div class="cc-bg"></div>
-            <div class="cc-content">
-                <div class="cc-top">
-                    <div class="cc-logo">
-                        <svg viewBox="0 0 200 200" width="28" height="28">
-                            <path d="M100 100 Q100 55 85 40 Q70 25 55 40 Q40 55 55 70 Q70 85 100 100" fill="currentColor"/>
-                            <path d="M100 100 Q145 100 160 85 Q175 70 160 55 Q145 40 130 55 Q115 70 100 100" fill="currentColor"/>
-                            <path d="M100 100 Q55 100 40 115 Q25 130 40 145 Q55 160 70 145 Q85 130 100 100" fill="currentColor"/>
-                            <path d="M100 100 Q100 145 115 160 Q130 175 145 160 Q160 145 145 130 Q130 115 100 100" fill="currentColor"/>
-                            <path d="M100 100 Q130 70 150 55 Q165 45 155 30 Q140 20 125 35 Q110 50 100 100" fill="currentColor" opacity="0.7"/>
-                        </svg>
-                        <span class="cinzel">BLACK-CORE</span>
-                    </div>
-                    <span class="cc-network">{activeNetworkName}</span>
+        <!-- Gas Estimator -->
+        <div class="bg-anti-surface border border-anti-border rounded-[2.5rem] p-10 flex flex-col justify-between relative overflow-hidden group">
+            <div class="absolute inset-0 bg-linear-to-b from-anti-accent/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
+            <div class="flex items-center gap-4">
+                <div class="w-12 h-12 bg-black rounded-2xl flex items-center justify-center border border-anti-border group-hover:border-anti-accent transition-colors">
+                    <svg class="w-6 h-6 text-anti-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
                 </div>
-                <div class="cc-balance">
-                    <span class="cc-amount">{nativeBalance}</span>
-                    <span class="cc-ticker">{nativeTicker}</span>
+                <span class="text-[10px] font-black uppercase tracking-widest text-gray-500">Estimación de Gas</span>
+            </div>
+            <div class="flex flex-col gap-4">
+                <div class="space-y-1">
+                    <span class="text-gray-600 text-[9px] font-black uppercase tracking-widest">Costo de Red</span>
+                    <div class="text-2xl font-cinzel font-black text-white">{parseFloat(estimatedTotalGas).toFixed(8)} <span class="text-xs text-anti-accent">{nativeTicker}</span></div>
                 </div>
-                <div class="cc-bottom">
-                    <div class="cc-addr">
-                        <span class="cc-label">DIRECCIÓN</span>
-                        <span class="cc-value mono">{shortAddress(address)}</span>
+                <div class="flex gap-6 border-t border-anti-border pt-4">
+                    <div class="space-y-0.5">
+                        <span class="text-[8px] font-black text-gray-600 uppercase">Gwei</span>
+                        <div class="text-xs font-mono text-anti-silver">{parseFloat(gasPrice || '0').toFixed(2)}</div>
                     </div>
-                    <div class="cc-token">
-                        <span class="cc-label">TOKEN</span>
-                        <span class="cc-value">{formattedTokenBalance} {tokenSymbol}</span>
-                    </div>
-                    <div class="cc-chain">
-                        <span class="cc-label">CHAIN</span>
-                        <span class="cc-value">{chainId || '---'}</span>
+                    <div class="space-y-0.5">
+                        <span class="text-[8px] font-black text-gray-600 uppercase">Limit</span>
+                        <div class="text-xs font-mono text-anti-silver">{estimatedGasLimit}</div>
                     </div>
                 </div>
             </div>
         </div>
     </div>
 
-    <div class="stats-grid">
-        <div class="stat-card gold">
-            <div class="card-title cinzel">Dirección de Red</div>
-            <div class="card-content">
-                <span class="mono">{shortAddress(address)}</span>
-                <button class="copy-btn" on:click={copyAddress}>{copied ? 'Copiado' : 'Copiar'}</button>
-            </div>
-            <div class="card-sub">{address}</div>
-        </div>
-
-        <div class="stat-card silver">
-            <div class="card-title cinzel">Protocolo Activo</div>
-            <div class="card-content">
-                <span>{activeNetworkName}</span>
-            </div>
-            <div class="card-sub">Chain ID: {chainId || '---'}</div>
-        </div>
-
-        <div class="stat-card gold">
-            <div class="card-title cinzel">Balance Nativo</div>
-            <div class="card-content">
-                <span class="val">{nativeBalance}</span>
-                <span class="unit">{nativeTicker}</span>
-            </div>
-        </div>
-
-        <div class="stat-card available">
-            <div class="card-title cinzel">Activos del Núcleo</div>
-            <div class="card-content">
-                <span class="val accent">{formattedTokenBalance}</span>
-                <span class="unit accent">{tokenSymbol}</span>
-            </div>
-        </div>
-    </div>
-
-    <div class="main-grid">
-        <section class="transfer-section">
-            <h3 class="cinzel">Transmisión de Activos</h3>
-            <div class="form-body">
-                <div class="input-field">
-                    <label for="to">Dirección de Destino</label>
-                    <input id="to" type="text" bind:value={toAddress} placeholder="0x..." />
-                </div>
-                <div class="input-field">
-                    <label for="amount">Monto ({nativeTicker})</label>
-                    <input id="amount" type="number" bind:value={amount} placeholder="0.00" />
+    <!-- Main Transfer Panel -->
+    <div class="lg:col-span-7 flex flex-col gap-8">
+        <section class="bg-anti-surface border border-anti-border rounded-[2.5rem] p-10 relative overflow-hidden shadow-2xl">
+            <div class="flex items-center justify-between mb-10">
+                <div class="flex items-center gap-4">
+                    <div class="w-1.5 h-8 bg-anti-accent rounded-full"></div>
+                    <h2 class="font-cinzel text-3xl font-black text-white uppercase tracking-tight">Transferencia</h2>
                 </div>
                 
+                <!-- Transfer Type Toggle -->
+                <div class="flex bg-black p-1 rounded-xl border border-anti-border">
+                    <button on:click={() => transferType = 'native'} class="px-4 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all {transferType === 'native' ? 'bg-anti-accent text-white shadow-lg' : 'text-gray-600 hover:text-white'}">NATIVO</button>
+                    <button on:click={() => transferType = 'contract'} class="px-4 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all {transferType === 'contract' ? 'bg-anti-accent text-white shadow-lg' : 'text-gray-600 hover:text-white'}">CONTRATO</button>
+                </div>
+            </div>
+
+            <div class="space-y-6">
+                {#if transferType === 'contract'}
+                    <div class="space-y-3" transition:slide>
+                        <label for="contractAddress" class="text-[10px] font-black uppercase tracking-widest text-gray-500 ml-4">Dirección del Contrato (ERC20)</label>
+                        <input id="contractAddress" type="text" bind:value={contractAddress} placeholder="0x... (Contrato del Token)" class="w-full bg-black border border-anti-border rounded-2xl px-6 py-4 text-white placeholder:text-gray-700 focus:border-anti-accent focus:ring-4 focus:ring-anti-accent/10 outline-none transition-all font-mono text-sm" />
+                    </div>
+                {/if}
+
+                <div class="space-y-3">
+                    <label for="toAddress" class="text-[10px] font-black uppercase tracking-widest text-gray-500 ml-4">Dirección de Destino (Cuenta)</label>
+                    <input id="toAddress" type="text" bind:value={toAddress} placeholder="0x... (Cuenta del Receptor)" class="w-full bg-black border border-anti-border rounded-2xl px-6 py-4 text-white placeholder:text-gray-700 focus:border-anti-accent focus:ring-4 focus:ring-anti-accent/10 outline-none transition-all font-mono text-sm" />
+                </div>
+
+                <div class="space-y-3">
+                    <label for="amount" class="text-[10px] font-black uppercase tracking-widest text-gray-500 ml-4">Monto a Enviar</label>
+                    <div class="relative">
+                        <input id="amount" type="number" bind:value={amount} placeholder="0.00" class="w-full bg-black border border-anti-border rounded-2xl px-6 py-5 text-white focus:border-anti-accent focus:ring-4 focus:ring-anti-accent/10 outline-none transition-all font-mono text-2xl" />
+                        <div class="absolute right-6 top-1/2 -translate-y-1/2 text-anti-accent font-black tracking-widest">{transferType === 'native' ? nativeTicker : 'TOKENS'}</div>
+                    </div>
+                </div>
+
                 {#if error}
-                    <p class="error-text">{error}</p>
+                    <div class="p-4 bg-red-900/10 border border-red-500/30 rounded-2xl text-red-500 text-[10px] font-black uppercase" transition:slide>{error}</div>
                 {/if}
 
                 {#if txHash}
-                    <div class="tx-result">
-                        <p>Tx Hash: <span class="mono">{shortAddress(txHash)}</span></p>
-                        <a href="{getExplorerBase(chainId)}{txHash}" target="_blank">Ver en Explorer</a>
+                    <div class="p-5 bg-green-900/10 border border-green-500/30 rounded-2xl flex items-center justify-between" transition:slide>
+                        <div>
+                            <span class="block text-[10px] font-black text-green-500 uppercase">Transacción Exitosa</span>
+                            <span class="text-[9px] text-gray-500 font-mono">{txHash.slice(0, 20)}...</span>
+                        </div>
+                        <a href="{getExplorerBase(chainId)}{txHash}" target="_blank" class="px-5 py-2.5 bg-green-500 text-black rounded-xl text-[10px] font-black uppercase tracking-widest hover:scale-105 transition-transform">Ver Detalle</a>
                     </div>
                 {/if}
 
-                <button class="action-btn" on:click={sendTx} disabled={loading || !toAddress || !amount}>
-                    {loading ? 'Procesando...' : 'Ejecutar Transmisión'}
+                <button on:click={sendTx} disabled={loading || !toAddress || !amount || (transferType === 'contract' && !contractAddress)} class="w-full py-6 bg-white text-black font-black font-cinzel text-xl rounded-2xl hover:bg-anti-accent hover:text-white transition-all duration-500 disabled:opacity-20 shadow-2xl">
+                    {loading ? 'PROCESANDO...' : 'EJECUTAR TRANSACCIÓN'}
                 </button>
             </div>
         </section>
+    </div>
 
-        <section class="history-section">
-            <h3 class="cinzel">Historial de Operaciones</h3>
-            <div class="history-list">
-                {#if history.length > 0}
+    <!-- Sidebar Activity -->
+    <div class="lg:col-span-5">
+        <section class="bg-anti-surface/50 border border-anti-border rounded-[2.5rem] p-10 h-full flex flex-col shadow-xl">
+            <h3 class="font-cinzel text-xl font-black text-white uppercase tracking-tight mb-10">Actividad Reciente</h3>
+            <div class="flex-1 space-y-4 overflow-y-auto pr-2 custom-scrollbar">
+                {#if historyLoading}
+                    <div class="flex flex-col gap-4 animate-pulse">
+                        {#each Array(4) as _}
+                            <div class="h-24 bg-white/5 rounded-2xl border border-white/5"></div>
+                        {/each}
+                    </div>
+                {:else if history.length > 0}
                     {#each history as tx}
-                        <div class="tx-item">
-                            <div class="tx-type {tx.type.toLowerCase()}">{tx.type === 'Received' ? 'Recibido' : 'Enviado'}</div>
-                            <div class="tx-details">
-                                <span class="tx-amt">{Number(tx.amount).toFixed(4)} {tx.assetSymbol || nativeTicker}</span>
-                                <span class="tx-date">{new Date(tx.timestamp).toLocaleDateString()}</span>
+                        <a 
+                            href="{tx.explorerBase || getExplorerBase(chainId)}{tx.hash}" 
+                            target="_blank" 
+                            class="bg-black/60 border border-anti-border p-5 rounded-2xl flex items-center justify-between group hover:border-anti-accent transition-all cursor-pointer"
+                        >
+                            <div class="flex items-center gap-5">
+                                <div class="w-12 h-12 rounded-xl flex items-center justify-center 
+                                    {tx.type === 'Received' || tx.type === 'Recibido' ? 'bg-green-500/10 text-green-500' : 'bg-anti-accent/10 text-anti-accent'}">
+                                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" 
+                                            d={tx.type === 'Received' || tx.type === 'Recibido' ? 'M19 14l-7 7m0 0l-7-7m7 7V3' : 'M5 10l7-7m0 0l7 7m-7-7v18'}/>
+                                    </svg>
+                                </div>
+                                <div>
+                                    <div class="text-xs font-black text-white uppercase tracking-widest">
+                                        {tx.type}
+                                    </div>
+                                    <div class="text-[10px] text-gray-600 font-mono">{new Date(tx.timestamp).toLocaleString()}</div>
+                                </div>
                             </div>
-                            <a href="{(tx.explorerBase || getExplorerBase(tx.chainId)) + tx.hash}" target="_blank" class="tx-link">
-                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6M15 3h6v6M10 14L21 3"/></svg>
-                            </a>
-                        </div>
+                            <div class="flex items-center gap-6">
+                                <div class="text-right">
+                                    <div class="text-lg font-black font-cinzel {tx.type === 'Received' || tx.type === 'Recibido' ? 'text-green-500' : 'text-white'}">
+                                        {tx.type === 'Received' || tx.type === 'Recibido' ? '+' : '-'}{parseFloat(tx.amount).toFixed(4)}
+                                    </div>
+                                    <div class="text-[10px] text-gray-600 font-black uppercase">{tx.assetSymbol || nativeTicker}</div>
+                                </div>
+                                <div class="p-2 bg-white/5 rounded-lg group-hover:bg-anti-accent transition-colors">
+                                    <svg class="w-4 h-4 text-gray-600 group-hover:text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/>
+                                    </svg>
+                                </div>
+                            </div>
+                        </a>
                     {/each}
                 {:else}
-                    <p class="empty">Sin registros de actividad.</p>
+                    <div class="flex flex-col items-center justify-center h-60 opacity-20">
+                        <svg class="w-16 h-16 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                        <p class="text-[10px] font-black uppercase tracking-[0.3em]">Sin actividad reciente</p>
+                    </div>
                 {/if}
             </div>
         </section>
     </div>
 </div>
 
-
 <style>
-    .dash-container {
-        display: flex;
-        flex-direction: column;
-        gap: 2.5rem;
-    }
-
-    .dash-header h2 {
-        font-size: 1.8rem;
-        margin: 0;
-        color: var(--accent);
-        text-shadow: 0 0 10px rgba(230, 0, 0, 0.3);
-    }
-
-    .dash-header p {
-        color: var(--text-secondary);
-        margin: 0.5rem 0 0;
-    }
-
-    /* ── Credit Card ── */
-    .card-section {
-        display: flex;
-        justify-content: center;
-    }
-
-    .credit-card {
-        width: 420px;
-        height: 240px;
-        border-radius: 16px;
-        position: relative;
-        overflow: hidden;
-        box-shadow: 0 20px 50px rgba(0,0,0,0.5), 0 0 30px rgba(230,0,0,0.1);
-        transition: transform 0.3s ease, box-shadow 0.3s ease;
-    }
-
-    .credit-card:hover {
-        transform: translateY(-5px) rotateX(2deg);
-        box-shadow: 0 25px 60px rgba(0,0,0,0.6), 0 0 40px rgba(230,0,0,0.2);
-    }
-
-    .cc-bg {
-        position: absolute;
-        inset: 0;
-        background: linear-gradient(135deg, #0a0a0a 0%, #1a0000 40%, #0d0d0d 70%, #0a0000 100%);
-        border: 1px solid rgba(230,0,0,0.2);
-        border-radius: 16px;
-    }
-
-    .cc-bg::after {
-        content: '';
-        position: absolute;
-        top: -50%;
-        right: -50%;
-        width: 100%;
-        height: 100%;
-        background: radial-gradient(circle, rgba(230,0,0,0.08) 0%, transparent 70%);
-        pointer-events: none;
-    }
-
-    .cc-content {
-        position: relative;
-        z-index: 1;
-        padding: 1.5rem;
-        height: 100%;
-        display: flex;
-        flex-direction: column;
-        justify-content: space-between;
-        color: #fff;
-    }
-
-    .cc-top {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-    }
-
-    .cc-logo {
-        display: flex;
-        align-items: center;
-        gap: 0.5rem;
-        color: var(--accent);
-    }
-
-    .cc-logo span {
-        font-size: 0.75rem;
-        letter-spacing: 0.15em;
-    }
-
-    .cc-network {
-        font-size: 0.7rem;
-        color: #888;
-        background: rgba(255,255,255,0.05);
-        padding: 0.25rem 0.6rem;
-        border-radius: 10px;
-        border: 1px solid rgba(255,255,255,0.08);
-    }
-
-    .cc-balance {
-        display: flex;
-        align-items: baseline;
-        gap: 0.5rem;
-    }
-
-    .cc-amount {
-        font-size: 2rem;
-        font-weight: 800;
-        color: #f0f0f0;
-        font-family: 'JetBrains Mono', monospace;
-    }
-
-    .cc-ticker {
-        font-size: 0.85rem;
-        color: var(--accent);
-        font-weight: 700;
-    }
-
-    .cc-bottom {
-        display: flex;
-        justify-content: space-between;
-        gap: 1rem;
-    }
-
-    .cc-label {
-        display: block;
-        font-size: 0.55rem;
-        color: #999; /* Antes #666 - Más claro */
-        text-transform: uppercase;
-        letter-spacing: 0.1em;
-        margin-bottom: 0.2rem;
-    }
-
-    .cc-value {
-        font-size: 0.8rem;
-        color: #eee; /* Antes #ccc - Más claro */
-        font-weight: 600;
-    }
-
-    @media (max-width: 500px) {
-        .credit-card { width: 100%; height: auto; min-height: 220px; }
-    }
-
-
-    .stats-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-        gap: 1.5rem;
-    }
-
-    .stat-card {
-        background: var(--surface);
-        border: 1px solid var(--border-color);
-        padding: 1.5rem;
-        border-radius: 4px;
-        position: relative;
-        overflow: hidden;
-    }
-
-    .stat-card::before {
-        content: '';
-        position: absolute;
-        top: 0; left: 0;
-        width: 100%; height: 3px;
-        background: var(--border-color);
-    }
-
-    .stat-card.gold::before { background: var(--accent); }
-    .stat-card.silver::before { background: var(--accent-2); }
-    .stat-card.available::before { background: var(--success); }
-
-    .card-title {
-        font-size: 0.75rem;
-        color: #ddd; /* Antes var(--text-secondary) - Más brillante */
-        text-transform: uppercase;
-        margin-bottom: 1rem;
-        letter-spacing: 0.05em;
-    }
-
-    .card-content {
-        display: flex;
-        align-items: baseline;
-        gap: 0.5rem;
-        font-size: 1.4rem;
-        font-weight: 700;
-        margin-bottom: 0.5rem;
-    }
-
-    .card-content .val { color: #f5f5f5; } /* Antes var(--accent-2) - Blanco metálico */
-    .card-content .val.accent { color: var(--accent); }
-    .card-content .unit { font-size: 0.9rem; color: #aaa; }
-
-    .card-sub {
-        font-size: 0.75rem;
-        color: #999; /* Antes var(--text-secondary) - Más contraste */
-        font-family: 'JetBrains Mono', monospace;
-        word-break: break-all;
-    }
-
-    .copy-btn {
-        font-size: 0.7rem;
-        padding: 0.2rem 0.5rem;
-        background: var(--surface-soft);
-        border: 1px solid var(--border-color);
-        color: var(--accent);
-        cursor: pointer;
-        border-radius: 4px;
-    }
-
-    .main-grid {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 2rem;
-    }
-
-    @media (max-width: 1000px) {
-        .main-grid { grid-template-columns: 1fr; }
-    }
-
-    section {
-        background: var(--surface);
-        border: 1px solid var(--border-color);
-        padding: 2rem;
-        border-radius: 4px;
-    }
-
-    section h3 {
-        margin: 0 0 1.5rem;
-        font-size: 1.2rem;
-        color: var(--accent);
-        border-bottom: 1px solid var(--border-color);
-        padding-bottom: 0.75rem;
-    }
-
-    .form-body {
-        display: flex;
-        flex-direction: column;
-        gap: 1.25rem;
-    }
-
-    .input-field {
-        display: flex;
-        flex-direction: column;
-        gap: 0.5rem;
-    }
-
-    .input-field label {
-        font-size: 0.8rem;
-        color: var(--text-secondary);
-        text-transform: uppercase;
-        font-weight: 700;
-    }
-
-    .input-field input {
-        background: var(--bg);
-        border: 1px solid var(--border-color);
-        padding: 0.8rem 1rem;
-        color: var(--text-primary);
-        border-radius: 4px;
-        outline: none;
-    }
-
-    .input-field input:focus {
-        border-color: var(--accent);
-    }
-
-    .action-btn {
-        background: var(--accent);
-        color: #000;
-        border: none;
-        padding: 1rem;
-        font-weight: 700;
-        cursor: pointer;
-        border-radius: 4px;
-        text-transform: uppercase;
-        letter-spacing: 0.1em;
-        transition: background 0.2s;
-    }
-
-    .action-btn:hover:not(:disabled) { background: var(--accent-dark); }
-    .action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-
-    .error-text { color: var(--error); font-size: 0.85rem; margin: 0; }
-
-    .history-list {
-        display: flex;
-        flex-direction: column;
-        gap: 0.75rem;
-        max-height: 500px;
-        overflow-y: auto;
-    }
-
-    .tx-item {
-        background: var(--bg);
-        border: 1px solid var(--border-color);
-        padding: 1rem;
-        border-radius: 4px;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-    }
-
-    .tx-type {
-        font-size: 0.7rem;
-        font-weight: 800;
-        text-transform: uppercase;
-        padding: 0.2rem 0.5rem;
-        border-radius: 4px;
-    }
-
-    .tx-type.sent { color: var(--error); background: rgba(204, 0, 0, 0.1); }
-    .tx-type.received { color: var(--success); background: rgba(0, 128, 0, 0.1); }
-
-    .tx-details {
-        display: flex;
-        flex-direction: column;
-        align-items: flex-end;
-        gap: 0.2rem;
-    }
-
-    .tx-amt { font-weight: 700; color: var(--accent-2); }
-    .tx-date { font-size: 0.75rem; color: var(--text-secondary); }
-
-    .tx-link { color: var(--text-secondary); }
-    .tx-link:hover { color: var(--accent); }
-
-    .empty { text-align: center; color: var(--text-secondary); margin: 2rem 0; font-style: italic; }
-    .mono { font-family: 'JetBrains Mono', monospace; }
-
-    .tx-amount.received {
-        color: var(--accent);
-    }
-
-    .tx-chain {
-        margin-top: 0.14rem;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-    }
+    .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+    .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+    .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); border-radius: 10px; }
+    .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #e60000; }
 </style>
-

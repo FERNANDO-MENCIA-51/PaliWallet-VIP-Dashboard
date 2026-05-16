@@ -1,365 +1,141 @@
 <script>
-    import { createEventDispatcher, onMount } from 'svelte';
-    import { EVM_NETWORKS, UTXO_NETWORKS, buildAddChainParams, getNetworkName } from './config/networks.js';
+    import { fade, slide } from 'svelte/transition';
 
-    export let chainId = '';
+    export let currentChainId = '';
+    /** @param {any} net */
+    export let onSwitch = (net) => {};
+    /** @param {any} net */
+    export let onSwitchUtxo = (net) => {};
+    /** @type {string[]} */
+    export let hiddenNetworks = [];
+    /** @param {string} id */
+    export let onToggleHide = (id) => {};
+    
+    /** @type {any[]} */
+    export let evmNetworks = [];
+    /** @type {any[]} */
+    export let utxoNetworks = [];
 
-    const dispatch = createEventDispatcher();
+    let filter = 'visibles'; // 'visibles' | 'ocultas' | 'todas'
 
-    let error = '';
-    let status = '';
-    let selectedNetworkId = '57057';
-    let detectedChainId = '';
-    let busyNetworkId = '';
-    let busyUtxoId = '';
-    let activeUtxoNetworkId = '';
-    /** @type {any} */
-    let utxoAccount = null;
-
-    const utxoNetworks = UTXO_NETWORKS;
-    const evmNetworks = EVM_NETWORKS;
-
-    $: selectedNetwork = evmNetworks.find((network) => network.id === selectedNetworkId) || evmNetworks[0];
-    $: activeChainId = chainId || detectedChainId;
-    $: activeNetwork = evmNetworks.find((network) => network.id === activeChainId);
-
-    onMount(() => {
-        detectActiveNetwork();
-        detectUtxoState();
+    $: filteredEvm = evmNetworks.filter(net => {
+        const isHidden = hiddenNetworks.includes(net.id);
+        if (filter === 'visibles') return !isHidden;
+        if (filter === 'ocultas') return isHidden;
+        return true;
     });
 
-    function getPaliProvider() {
-        return /** @type {any} */(window).pali;
-    }
-
-    /** 
-     * @param {string} method 
-     * @param {string} [directName]
-     */
-    async function callPali(method, directName = '') {
-        const pali = getPaliProvider();
-        if (!pali) throw new Error('Pali Wallet no detectada.');
-
-        if (typeof pali.request === 'function') {
-            return pali.request({ method });
-        }
-
-        if (directName && typeof pali[directName] === 'function') {
-            return pali[directName]();
-        }
-
-        throw new Error(`Metodo no disponible: ${method}`);
-    }
-
-    /** 
-     * @param {any} target 
-     * @param {any} network 
-     * @param {any} [sysState]
-     */
-    function matchesUtxoNetwork(target, network, sysState = {}) {
-        const label = `${network?.label || ''} ${network?.key || ''} ${network?.currency || ''} ${network?.url || ''} ${sysState?.blockExplorerURL || ''}`.toLowerCase();
-        if (target.id === 'bitcoin') return target.expectedLabels.some((word) => label.includes(word)) || sysState?.isBitcoinBased === true;
-        if (typeof sysState?.isTestnet === 'boolean') return sysState.isTestnet === target.isTestnet;
-        return target.expectedLabels.some((word) => label.includes(word));
-    }
-
-    async function detectUtxoState() {
-        const pali = getPaliProvider();
-        if (!pali) return;
-
-        try {
-            const [state, network, account, balance] = await Promise.allSettled([
-                callPali('wallet_getSysProviderState'),
-                callPali('wallet_getNetwork', 'getNetwork'),
-                callPali('wallet_getAccount', 'getAccount'),
-                callPali('wallet_getBalance', 'getBalance')
-            ]);
-
-            const sysState = state.status === 'fulfilled' ? state.value : {};
-            const currentNetwork = network.status === 'fulfilled' ? network.value : {};
-            const currentAccount = account.status === 'fulfilled' ? account.value : null;
-            const currentBalance = balance.status === 'fulfilled' ? balance.value : null;
-
-            const matched = utxoNetworks.find((net) => matchesUtxoNetwork(net, currentNetwork, sysState));
-            activeUtxoNetworkId = matched?.id || '';
-            utxoAccount = currentAccount ? { ...currentAccount, balance: currentBalance, network: currentNetwork } : null;
-        } catch (err) {
-            console.warn('Error detectando estado UTXO:', err);
-        }
-    }
-
-    /** @param {any} net */
-    async function connectUtxoNetwork(net) {
-        error = ''; status = ''; busyUtxoId = net.id;
-        try {
-            const pali = getPaliProvider();
-            if (!pali) throw new Error('Pali Wallet no detectada.');
-            status = `Conectando ${net.name}...`;
-            if (typeof pali.request === 'function') {
-                await pali.request({ method: 'sys_requestAccounts', params: [] });
-            } else if (typeof pali.enable === 'function') {
-                await pali.enable();
-            }
-            await detectUtxoState();
-            status = `${net.name} conectada.`;
-        } catch (err) {
-            error = (/** @type {any} */(err)).message || 'Error de conexión UTXO';
-        } finally {
-            busyUtxoId = '';
-        }
-    }
-
-    async function detectActiveNetwork() {
-        try {
-            const ethereum = /** @type {any} */(window).ethereum;
-            if (!ethereum) return;
-            const chainHex = await ethereum.request({ method: 'eth_chainId' });
-            detectedChainId = parseInt(chainHex, 16).toString();
-        } catch (err) {
-            console.warn('Error detectando red EVM:', err);
-        }
-    }
-
-    /** @param {any} net */
-    async function switchNetwork(net) {
-        error = ''; status = ''; busyNetworkId = net.id;
-        try {
-            const ethereum = /** @type {any} */(window).ethereum;
-            if (!ethereum) throw new Error('Pali Wallet (EVM) no detectada.');
-
-            status = `Cambiando a ${net.name}...`;
-            await ethereum.request({
-                method: 'wallet_switchEthereumChain',
-                params: [{ chainId: net.chainHex }],
-            });
-
-            status = `Red cambiada a ${net.name}`;
-            dispatch('networkChanged', net.id);
-        } catch (switchError) {
-            if (/** @type {any} */(switchError).code === 4902) {
-                try {
-                    await (/** @type {any} */(window).ethereum).request({
-                        method: 'wallet_addEthereumChain',
-                        params: [buildAddChainParams(net)],
-                    });
-                    dispatch('networkChanged', net.id);
-                } catch (addError) {
-                    error = (/** @type {any} */(addError)).message || 'Error al agregar la red';
-                }
-            } else {
-                error = (/** @type {any} */(switchError)).message || 'Error al cambiar de red';
-            }
-        } finally {
-            busyNetworkId = '';
-        }
-    }
-</script>
 </script>
 
-<div class="networks-pane">
-    <div class="manager-header">
-        <h3 class="cinzel">CONTROL DE CAPAS</h3>
-        <p>Sincroniza tu Terminal con los diferentes Protocolos de Red.</p>
-    </div>
-
-    <div class="active-status">
-        <div class="status-item">
-            <span class="cinzel label">Protocolo EVM</span>
-            <strong class="value gold-text">{activeNetwork?.name || 'Inactivo'}</strong>
+<div class="flex flex-col gap-10" in:fade>
+    <header class="flex flex-col md:flex-row md:items-end justify-between gap-6">
+        <div class="flex flex-col gap-4">
+            <h2 class="font-cinzel text-4xl font-black text-white uppercase tracking-tight">Gestión de Redes</h2>
+            <p class="text-gray-500 max-w-xl">Personaliza tu terminal activando o desactivando protocolos. Las redes ocultas no aparecerán en el selector rápido.</p>
         </div>
-        <div class="status-item">
-            <span class="cinzel label">Protocolo UTXO</span>
-            <strong class="value silver-text">{utxoNetworks.find(n => n.id === activeUtxoNetworkId)?.name || 'Inactivo'}</strong>
+
+        <!-- Filter Controls -->
+        <div class="flex bg-black/40 border border-anti-border p-1 rounded-2xl">
+            <button on:click={() => filter = 'visibles'} class="px-6 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all {filter === 'visibles' ? 'bg-anti-accent text-white shadow-lg' : 'text-gray-500 hover:text-white'}">Visibles</button>
+            <button on:click={() => filter = 'ocultas'} class="px-6 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all {filter === 'ocultas' ? 'bg-anti-accent text-white shadow-lg' : 'text-gray-500 hover:text-white'}">Ocultas ({hiddenNetworks.length})</button>
+            <button on:click={() => filter = 'todas'} class="px-6 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all {filter === 'todas' ? 'bg-anti-accent text-white shadow-lg' : 'text-gray-500 hover:text-white'}">Todas</button>
         </div>
-    </div>
+    </header>
 
-    <div class="section-divider cinzel">Capas EVM</div>
-    <div class="network-list">
-        {#each evmNetworks as net}
-            <button class="net-row {activeChainId === net.id ? 'active gold' : ''}" on:click={() => switchNetwork(net)} disabled={busyNetworkId !== ''}>
-                <div class="net-icon cinzel">{net.iconText}</div>
-                <div class="net-info">
-                    <span class="net-name">{net.name}</span>
-                    <span class="net-sub">Chain ID: {net.id}</span>
+    <!-- EVM Section -->
+    <section class="space-y-8">
+        <div class="flex items-center gap-4">
+            <div class="h-px flex-1 bg-anti-border"></div>
+            <span class="text-[10px] font-black uppercase tracking-[0.5em] text-anti-accent">Protocolos EVM</span>
+            <div class="h-px flex-1 bg-anti-border"></div>
+        </div>
+
+        {#if filteredEvm.length > 0}
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6" transition:fade>
+                {#each filteredEvm as net (net.id)}
+                    {@const isHidden = hiddenNetworks.includes(net.id)}
+                    {@const isActive = currentChainId === net.id}
+                    
+                    <div class="bg-anti-surface border {isActive ? 'border-anti-accent shadow-[0_0_30px_rgba(230,0,0,0.15)]' : 'border-anti-border'} rounded-3xl p-8 flex flex-col gap-6 relative group transition-all hover:border-anti-accent/50 {isHidden ? 'opacity-60' : ''}">
+                        {#if isActive}
+                            <div class="absolute top-6 right-6">
+                                <div class="flex items-center gap-2 px-3 py-1 bg-anti-accent/10 border border-anti-accent/20 rounded-full">
+                                    <div class="w-1.5 h-1.5 rounded-full bg-anti-accent animate-pulse"></div>
+                                    <span class="text-[9px] font-black text-anti-accent uppercase">Activo</span>
+                                </div>
+                            </div>
+                        {/if}
+
+                        <div class="flex items-center gap-5">
+                            <div class="w-14 h-14 bg-black rounded-2xl flex items-center justify-center border border-anti-border font-cinzel text-xl font-black text-anti-accent group-hover:bg-anti-accent group-hover:text-white transition-all duration-500">
+                                {net.iconText || net.name[0]}
+                            </div>
+                            <div>
+                                <h3 class="text-white font-bold">{net.name}</h3>
+                                <p class="text-[10px] text-gray-500 font-mono tracking-tighter uppercase">Chain ID: {net.id}</p>
+                            </div>
+                        </div>
+
+                        <div class="space-y-3">
+                            <div class="flex justify-between text-[10px] font-bold uppercase tracking-widest">
+                                <span class="text-gray-600">Moneda:</span>
+                                <span class="text-anti-silver">{net.ticker}</span>
+                            </div>
+                            <div class="flex justify-between text-[10px] font-bold uppercase tracking-widest">
+                                <span class="text-gray-600">Estado:</span>
+                                <span class={isHidden ? 'text-red-500' : 'text-green-500'}>{isHidden ? 'DESACTIVADO' : 'VISIBLE'}</span>
+                            </div>
+                        </div>
+
+                        <div class="flex gap-2 mt-2">
+                            <button on:click={() => onSwitch(net)} class="flex-1 py-3 bg-white text-black font-black font-cinzel text-xs rounded-xl hover:bg-anti-accent hover:text-white transition-all">{isHidden ? 'ACTIVAR Y CAMBIAR' : 'CAMBIAR'}</button>
+                            <button on:click={() => onToggleHide(net.id)} class="px-4 py-3 border border-anti-border rounded-xl transition-all {isHidden ? 'bg-green-500/10 hover:border-green-500/50' : 'hover:bg-red-900/10 hover:border-red-500/50'}" title={isHidden ? 'Restaurar Red' : 'Desactivar Red'}>
+                                <svg class="w-5 h-5 {isHidden ? 'text-green-500' : 'text-red-500'}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d={isHidden ? "M12 4v16m8-8H4" : "M6 18L18 6M6 6l12 12"}/></svg>
+                            </button>
+                        </div>
+                    </div>
+                {/each}
+            </div>
+        {:else}
+            <div class="flex flex-col items-center justify-center py-20 border border-dashed border-anti-border rounded-3xl opacity-30">
+                <p class="font-cinzel text-sm uppercase tracking-widest">No hay redes en esta categoría</p>
+            </div>
+        {/if}
+    </section>
+
+    <!-- UTXO Section -->
+    <section class="space-y-8 mt-10">
+        <div class="flex items-center gap-4">
+            <div class="h-px flex-1 bg-anti-border"></div>
+            <span class="text-[10px] font-black uppercase tracking-[0.5em] text-gray-600">Protocolos UTXO (Nativos)</span>
+            <div class="h-px flex-1 bg-anti-border"></div>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {#each utxoNetworks as net}
+                <div class="bg-black/40 border border-anti-border rounded-3xl p-8 flex flex-col gap-6 group hover:border-anti-accent transition-all">
+                    <div class="flex items-center gap-5">
+                        <div class="w-14 h-14 bg-gray-900 rounded-2xl flex items-center justify-center border border-anti-border font-cinzel text-xl font-black text-gray-500 group-hover:text-anti-accent transition-colors">
+                            {net.iconText || net.name[0]}
+                        </div>
+                        <div>
+                            <h3 class="text-gray-400 font-bold group-hover:text-white transition-colors">{net.name}</h3>
+                            <p class="text-[10px] text-gray-600 font-mono tracking-tighter uppercase">Protocolo Nativo</p>
+                        </div>
+                    </div>
+                    <p class="text-[11px] text-gray-700 italic leading-relaxed">{net.note}</p>
+                    <button on:click={() => onSwitchUtxo(net)} class="w-full py-3 bg-white text-black font-black font-cinzel text-[10px] rounded-xl hover:bg-anti-accent hover:text-white transition-all uppercase tracking-widest">
+                        CAMBIAR A {net.symbol}
+                    </button>
                 </div>
-                {#if activeChainId === net.id}
-                    <span class="status-tag gold">ACTIVA</span>
-                {:else}
-                    <span class="status-tag">USAR</span>
-                {/if}
-            </button>
-        {/each}
-    </div>
+            {/each}
+        </div>
+    </section>
 
-    <div class="section-divider cinzel">Redes UTXO</div>
-    <div class="network-list">
-        {#each utxoNetworks as net}
-            <button class="net-row {activeUtxoNetworkId === net.id ? 'active silver' : ''}" on:click={() => connectUtxoNetwork(net)} disabled={busyUtxoId !== ''}>
-                <div class="net-icon cinzel silver">{net.iconText}</div>
-                <div class="net-info">
-                    <span class="net-name">{net.name}</span>
-                    <span class="net-sub">{net.symbol}</span>
-                </div>
-                {#if activeUtxoNetworkId === net.id}
-                    <span class="status-tag silver">CONECTADA</span>
-                {:else}
-                    <span class="status-tag">CONECTAR</span>
-                {/if}
-            </button>
-        {/each}
-    </div>
-
-    {#if status || error}
-        <footer class="msg-footer">
-            {#if status}<p class="status-msg">{status}</p>{/if}
-            {#if error}<p class="error-msg">{error}</p>{/if}
-        </footer>
-    {/if}
+    <footer class="mt-10 p-6 bg-red-900/5 border border-red-900/20 rounded-2xl">
+        <p class="text-[10px] text-gray-600 font-mono italic flex gap-3">
+            <span class="text-red-500 font-bold">NOTA SEGURIDAD:</span>
+            Para eliminar una red permanentemente de Pali Wallet, debes hacerlo manualmente desde la configuración de la extensión. El Terminal solo gestiona la visibilidad y conexión del DApp.
+        </p>
+    </footer>
 </div>
-
-<style>
-    .networks-pane {
-        padding: 0.5rem;
-        display: flex;
-        flex-direction: column;
-        gap: 1rem;
-    }
-
-    .manager-header h3 {
-        margin: 0;
-        font-size: 1.1rem;
-        color: var(--accent);
-    }
-
-    .manager-header p {
-        margin: 0.2rem 0 0;
-        font-size: 0.75rem;
-        color: var(--text-secondary);
-    }
-
-    .active-status {
-        background: var(--bg);
-        border: 1px solid var(--border-color);
-        padding: 0.75rem;
-        border-radius: 4px;
-        display: flex;
-        flex-direction: column;
-        gap: 0.5rem;
-    }
-
-    .status-item {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-    }
-
-    .status-item .label {
-        font-size: 0.65rem;
-        color: var(--text-secondary);
-        text-transform: uppercase;
-    }
-
-    .status-item .value {
-        font-size: 0.85rem;
-        font-weight: 700;
-    }
-
-    .gold-text { color: var(--accent); }
-    .silver-text { color: var(--accent-2); }
-
-    .section-divider {
-        font-size: 0.7rem;
-        color: var(--text-secondary);
-        border-bottom: 1px solid var(--border-color);
-        padding-bottom: 0.25rem;
-        margin-top: 0.5rem;
-        text-transform: uppercase;
-        letter-spacing: 0.1em;
-    }
-
-    .network-list {
-        display: flex;
-        flex-direction: column;
-        gap: 0.4rem;
-    }
-
-    .net-row {
-        background: var(--surface-soft);
-        border: 1px solid var(--border-color);
-        padding: 0.6rem;
-        border-radius: 4px;
-        display: flex;
-        align-items: center;
-        gap: 0.75rem;
-        cursor: pointer;
-        transition: all 0.2s;
-        text-align: left;
-    }
-
-    .net-row:hover:not(:disabled) {
-        background: var(--surface);
-        border-color: var(--accent-2);
-    }
-
-    .net-row.active.gold { border-color: var(--accent); background: rgba(212, 175, 55, 0.05); }
-    .net-row.active.silver { border-color: var(--accent-2); background: rgba(192, 192, 192, 0.05); }
-
-    .net-icon {
-        width: 32px;
-        height: 32px;
-        background: var(--bg);
-        border: 1px solid var(--accent);
-        color: var(--accent);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 0.7rem;
-        font-weight: 900;
-        border-radius: 2px;
-    }
-
-    .net-icon.silver {
-        border-color: var(--accent-2);
-        color: var(--accent-2);
-    }
-
-    .net-info {
-        flex: 1;
-        display: flex;
-        flex-direction: column;
-    }
-
-    .net-name {
-        font-size: 0.85rem;
-        font-weight: 700;
-        color: var(--text-primary);
-    }
-
-    .net-sub {
-        font-size: 0.65rem;
-        color: var(--text-secondary);
-    }
-
-    .status-tag {
-        font-size: 0.6rem;
-        font-weight: 800;
-        padding: 0.2rem 0.4rem;
-        border-radius: 2px;
-        background: var(--bg);
-        color: var(--text-secondary);
-        border: 1px solid var(--border-color);
-    }
-
-    .status-tag.gold { color: var(--accent); border-color: var(--accent); }
-    .status-tag.silver { color: var(--accent-2); border-color: var(--accent-2); }
-
-    .msg-footer {
-        padding-top: 0.5rem;
-        border-top: 1px solid var(--border-color);
-    }
-
-    .status-msg { font-size: 0.7rem; color: var(--accent-2); margin: 0; }
-    .error-msg { font-size: 0.7rem; color: var(--error); margin: 0; }
-
-    button:disabled { opacity: 0.6; cursor: not-allowed; }
-</style>

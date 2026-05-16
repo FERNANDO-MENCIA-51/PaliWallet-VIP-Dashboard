@@ -68,7 +68,8 @@ export const EVM_NETWORKS = [
         explorer: 'https://etherscan.io',
         nativeCurrencyName: 'Ether',
         iconText: 'E',
-        tone: 'indigo'
+        tone: 'indigo',
+        apiUrl: 'https://api.etherscan.io/api'
     },
     {
         id: '137',
@@ -80,7 +81,8 @@ export const EVM_NETWORKS = [
         explorer: 'https://polygonscan.com',
         nativeCurrencyName: 'Polygon',
         iconText: 'P',
-        tone: 'violet'
+        tone: 'violet',
+        apiUrl: 'https://api.polygonscan.com/api'
     },
     {
         id: '5700',
@@ -140,7 +142,8 @@ export const EVM_NETWORKS = [
         explorer: 'https://sepolia.etherscan.io',
         nativeCurrencyName: 'Sepolia Ether',
         iconText: 'SE',
-        tone: 'indigo'
+        tone: 'indigo',
+        apiUrl: 'https://api-sepolia.etherscan.io/api'
     },
     {
         id: '56',
@@ -225,6 +228,18 @@ export const EVM_NETWORKS = [
         nativeCurrencyName: 'Sepolia Ether',
         iconText: 'OP',
         tone: 'pink'
+    },
+    {
+        id: '560048',
+        name: 'Ethereum Hoodi',
+        category: 'EVM Networks',
+        chainHex: '0x88bb0',
+        rpc: 'https://rpc.hoodi.ethpandaops.io',
+        ticker: 'ETH',
+        explorer: 'https://light-hoodi.beaconcha.in',
+        nativeCurrencyName: 'Hoodi ETH',
+        iconText: 'H',
+        tone: 'orange'
     }
 ];
 
@@ -253,8 +268,12 @@ export function getExplorerBase(id) {
 
 /** @param {string|number} id */
 export function getExplorerApiUrl(id) {
-    const explorer = getEvmNetwork(id)?.explorer;
-    return explorer ? `${explorer.replace(/\/$/, '')}/api` : '';
+    const network = getEvmNetwork(id);
+    if (!network) return '';
+    // Use specific apiUrl if defined (e.g., Etherscan)
+    if (network.apiUrl) return network.apiUrl;
+    // Default to Blockscout style /api
+    return network.explorer ? `${network.explorer.replace(/\/$/, '')}/api` : '';
 }
 
 /** @param {any} network */
