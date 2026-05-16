@@ -59,11 +59,11 @@
     function confirmToggle(id) {
         const isHidden = hiddenNetworks.includes(id);
         modalConfig = {
-            title: isHidden ? 'Vincular Red' : 'Retirar Red',
+            title: isHidden ? 'Agregar Red' : 'Retirar Red',
             message: isHidden 
                 ? '¿Quieres volver a vincular esta red al terminal?' 
                 : '¿Seguro que quieres retirar esta red? Se eliminará de tu terminal pero seguirá disponible en Pali Wallet.',
-            confirmText: isHidden ? 'Vincular' : 'Retirar Protocolo',
+            confirmText: isHidden ? 'AGREGAR' : 'Retirar Protocolo',
             action: () => {
                 onToggleHide(id);
                 showModal = false;
@@ -143,7 +143,7 @@
 
                         <div class="flex gap-2 mt-2">
                             <button on:click={() => confirmSwitch(net)} class="flex-1 py-3 bg-white text-black font-black font-cinzel text-xs rounded-xl hover:bg-anti-accent hover:text-white transition-all">{isHidden ? 'VINCULAR Y CAMBIAR' : 'CAMBIAR'}</button>
-                            <button on:click={() => confirmToggle(net.id)} class="px-4 py-3 border border-anti-border rounded-xl transition-all {isHidden ? 'bg-green-500/10 hover:border-green-500/50' : 'hover:bg-red-900/10 hover:border-red-500/50'}" title="{isHidden ? 'Vincular Red' : 'Retirar Red'}">
+                            <button on:click={() => confirmToggle(net.id)} class="px-4 py-3 border border-anti-border rounded-xl transition-all {isHidden ? 'bg-green-500/10 hover:border-green-500/50' : 'hover:bg-red-900/10 hover:border-red-500/50'}" title="{isHidden ? 'AGREGAR' : 'Retirar Red'}">
                                 <svg class="w-5 h-5 {isHidden ? 'text-green-500' : 'text-red-500'}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     {#if isHidden}
                                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
