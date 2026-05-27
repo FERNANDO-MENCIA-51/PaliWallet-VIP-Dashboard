@@ -7,7 +7,17 @@
     "function symbol() view returns (string)",
     "event Transfer(address indexed from, address indexed to, uint256 value)",
   ];
-  const TOKEN_ADDRESS = "0x0000000000000000000000000000000000000000"; // Reemplaza con la dirección del contrato del Token
+  let TOKEN_ADDRESS = "0x0000000000000000000000000000000000000000"; // Se cargará dinámicamente desde localStorage fdev_token_address
+  
+  function updateTokenAddress() {
+    const saved = localStorage.getItem("fdev_token_address");
+    if (saved && ethers.isAddress(saved)) {
+      TOKEN_ADDRESS = saved;
+    } else {
+      TOKEN_ADDRESS = "0x0000000000000000000000000000000000000000";
+    }
+  }
+
   let tokenBalance = "";
   let tokenSymbol = "TSYS";
   let tokenDecimals = 18;
@@ -18,6 +28,7 @@
   import Intro from "./lib/Intro.svelte";
   import Wallet from "./lib/Wallet.svelte";
   import Networks from "./lib/Networks.svelte";
+  import Contracts from "./lib/Contracts.svelte";
   import {
     getExplorerApiUrl,
     getExplorerBase,
@@ -83,10 +94,16 @@
       label: "Redes",
       icon: "M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9",
     },
+    {
+      id: "contracts",
+      label: "Contratos",
+      icon: "M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z",
+    }
   ];
 
   onMount(async () => {
     initAnimations();
+    updateTokenAddress();
     try {
       await tryAutoReconnect();
     } finally {
@@ -109,11 +126,15 @@
         }
       });
 
-      ethereum.on("chainChanged", (hex) => {
+      ethereum.on("chainChanged", async (hex) => {
         chainId = parseInt(hex, 16).toString();
-        win["sessionStorage"].removeItem("pali_switching");
         const eth = win["ethereum"];
         provider = new ethers.BrowserProvider(eth);
+        try {
+          signer = await provider.getSigner();
+        } catch (e) {
+          console.warn("Could not get signer on chain change:", e);
+        }
         refreshBalance();
         loadExplorerHistory();
       });
@@ -131,6 +152,10 @@
         easing: "easeOutElastic(1, .8)",
       });
     }
+  }
+
+  $: if (activeTab) {
+    updateTokenAddress();
   }
 
   $: if (address && chainId) {
@@ -507,11 +532,6 @@
       const ethereum = win["ethereum"];
       if (!ethereum) return;
       
-      // AUTO-UNHIDE if the network was hidden
-      if (hiddenNetworks.includes(net.id)) {
-        toggleHideNetwork(net.id);
-      }
-
       if (chainId === "utxo") {
         address = "";
         connected = false;
@@ -853,6 +873,14 @@
           onSwitch={switchNetwork}
           onSwitchUtxo={switchUtxoNetwork}
           onToggleHide={toggleHideNetwork}
+        />
+      {:else if activeTab === "contracts"}
+          <Contracts
+          {address}
+          {chainId}
+          {connected}
+          {signer}
+          {provider}
         />
       {/if}
     </div>

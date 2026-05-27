@@ -30,6 +30,101 @@
     let estimatedGasLimit = '21000';
     let estimatedTotalGas = '0';
 
+    // Contacts Book States
+    let contacts = [];
+    let selectedContactAddress = '';
+    let showAddContactForm = false;
+    let showContactList = false;
+    let editingContactIndex = -1;
+    let newContactAlias = '';
+    let newContactAddress = '';
+    let contactError = '';
+
+    onMount(() => {
+        loadContacts();
+    });
+
+    function loadContacts() {
+        try {
+            const stored = localStorage.getItem('fdev_contacts');
+            if (stored) {
+                contacts = JSON.parse(stored);
+            } else {
+                contacts = [];
+            }
+        } catch (e) {
+            console.error("Failed to load contacts", e);
+        }
+    }
+
+    function saveContact() {
+        contactError = '';
+        if (!newContactAlias.trim()) {
+            contactError = 'El alias no puede estar vacío';
+            return;
+        }
+        const validation = isValidChecksumAddress(newContactAddress.trim());
+        if (!validation.valid) {
+            contactError = 'Dirección de contacto inválida';
+            return;
+        }
+        
+        const alias = newContactAlias.trim();
+        const address = newContactAddress.trim();
+
+        if (editingContactIndex > -1) {
+            // Edit existing contact
+            if (contacts.some((c, i) => i !== editingContactIndex && c.address.toLowerCase() === address.toLowerCase())) {
+                contactError = 'Esta dirección ya está en tus contactos';
+                return;
+            }
+            contacts[editingContactIndex] = { alias, address };
+            contacts = [...contacts];
+            editingContactIndex = -1;
+        } else {
+            // Add new contact
+            if (contacts.some(c => c.address.toLowerCase() === address.toLowerCase())) {
+                contactError = 'Esta dirección ya está en tus contactos';
+                return;
+            }
+            contacts = [...contacts, { alias, address }];
+        }
+
+        localStorage.setItem('fdev_contacts', JSON.stringify(contacts));
+        
+        // Reset form
+        newContactAlias = '';
+        newContactAddress = '';
+        showAddContactForm = false;
+    }
+
+    function editContact(index) {
+        const contact = contacts[index];
+        newContactAlias = contact.alias;
+        newContactAddress = contact.address;
+        editingContactIndex = index;
+        showAddContactForm = true;
+        showContactList = false;
+        contactError = '';
+    }
+
+    function deleteContact(index) {
+        contacts = contacts.filter((_, i) => i !== index);
+        localStorage.setItem('fdev_contacts', JSON.stringify(contacts));
+        // Reset dropdown selection if the deleted address was selected
+        selectedContactAddress = '';
+    }
+
+    /** @param {any} event */
+    function handleContactSelect(event) {
+        const selectedVal = event.target.value;
+        if (selectedVal) {
+            toAddress = selectedVal;
+            // Reset selection to "Contactos..." so it shows "Contactos..." as label
+            selectedContactAddress = '';
+        }
+    }
+
     // Contract Interaction States
     let transferType = 'native'; // 'native' | 'contract'
     let contractAddress = '';
@@ -279,8 +374,165 @@
                 {/if}
 
                 <div class="space-y-3">
-                    <label for="toAddress" class="text-[10px] font-black uppercase tracking-widest text-white/50 ml-4">Dirección de Destino (Cuenta)</label>
-                    <input id="toAddress" type="text" bind:value={toAddress} placeholder="0x... (Cuenta del Receptor)" class="w-full bg-black border border-anti-border rounded-2xl px-6 py-4 text-white placeholder:text-white/20 focus:border-anti-accent focus:ring-4 focus:ring-anti-accent/10 outline-none transition-all font-mono text-sm" />
+                    <div class="flex justify-between items-center ml-4 mr-2">
+                        <label for="toAddress" class="text-[10px] font-black uppercase tracking-widest text-white/50">Dirección de Destino (Cuenta)</label>
+                        <select 
+                            bind:value={selectedContactAddress} 
+                            on:change={handleContactSelect} 
+                            class="bg-black text-white/70 hover:text-white text-[10px] font-black uppercase tracking-widest border border-anti-border rounded-xl px-3 py-1.5 focus:border-anti-accent outline-none cursor-pointer transition-all"
+                        >
+                            <option value="" class="bg-black text-white/50">Contactos...</option>
+                            {#each contacts as contact}
+                                <option value={contact.address} class="bg-black text-white">{contact.alias} ({shortAddress(contact.address)})</option>
+                            {/each}
+                        </select>
+                    </div>
+                    <input id="toAddress" type="text" bind:value={toAddress} placeholder="0x... o vitalik.eth" class="w-full bg-black border border-anti-border rounded-2xl px-6 py-4 text-white placeholder:text-white/20 focus:border-anti-accent focus:ring-4 focus:ring-anti-accent/10 outline-none transition-all font-mono text-sm" />
+                    
+                    <div class="flex justify-start items-center gap-4 px-4">
+                        <button 
+                            type="button" 
+                            on:click={() => { 
+                                if (showAddContactForm) {
+                                    showAddContactForm = false;
+                                    editingContactIndex = -1;
+                                    newContactAlias = '';
+                                    newContactAddress = '';
+                                } else {
+                                    showAddContactForm = true;
+                                    showContactList = false;
+                                    editingContactIndex = -1;
+                                }
+                                contactError = ''; 
+                            }} 
+                            class="text-anti-accent hover:text-white text-[10px] font-black uppercase tracking-wider transition-all flex items-center gap-1.5"
+                        >
+                            {#if showAddContactForm}
+                                ✕ {editingContactIndex > -1 ? 'Cancelar Edición' : 'Cancelar'}
+                            {:else}
+                                + Guardar como contacto
+                            {/if}
+                        </button>
+                        <span class="text-white/20 text-xs">|</span>
+                        <button 
+                            type="button" 
+                            on:click={() => { 
+                                showContactList = !showContactList; 
+                                showAddContactForm = false; 
+                                editingContactIndex = -1;
+                            }} 
+                            class="text-white/50 hover:text-white text-[10px] font-black uppercase tracking-wider transition-all flex items-center gap-1.5"
+                        >
+                            {#if showContactList}
+                                ✕ Ocultar Contactos
+                            {:else}
+                                👥 Administrar Contactos
+                            {/if}
+                        </button>
+                    </div>
+
+                    {#if showContactList}
+                        <div transition:slide class="bg-black/40 border border-anti-border/50 rounded-2xl p-5 space-y-4">
+                            <div class="flex justify-between items-center border-b border-anti-border/30 pb-2">
+                                <span class="text-[10px] font-black uppercase tracking-widest text-white/50">Tus Contactos Guardados</span>
+                                <span class="text-[9px] font-mono text-anti-accent uppercase">{contacts.length} total</span>
+                            </div>
+                            
+                            {#if contacts.length === 0}
+                                <div class="text-[10px] text-white/30 uppercase text-center py-6">No tienes contactos guardados</div>
+                            {:else}
+                                <div class="space-y-2.5 max-h-56 overflow-y-auto custom-scrollbar pr-1">
+                                    {#each contacts as contact, index}
+                                        <div class="flex items-center justify-between bg-black/60 border border-anti-border/50 px-4 py-3 rounded-xl hover:border-anti-accent transition-all">
+                                            <div class="flex flex-col min-w-0 mr-4">
+                                                <span class="text-xs font-black text-white truncate">{contact.alias}</span>
+                                                <span class="text-[9px] text-white/40 font-mono truncate">{contact.address}</span>
+                                            </div>
+                                            <div class="flex items-center gap-1.5 shrink-0">
+                                                <!-- Select Contact -->
+                                                <button 
+                                                    type="button" 
+                                                    on:click={() => { toAddress = contact.address; showContactList = false; }} 
+                                                    class="p-2 bg-white/5 hover:bg-green-500 hover:text-black rounded-lg text-white/50 transition-all"
+                                                    title="Seleccionar contacto"
+                                                >
+                                                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/>
+                                                    </svg>
+                                                </button>
+                                                <!-- Edit Contact -->
+                                                <button 
+                                                    type="button" 
+                                                    on:click={() => editContact(index)} 
+                                                    class="p-2 bg-white/5 hover:bg-anti-accent hover:text-white rounded-lg text-white/50 transition-all"
+                                                    title="Editar contacto"
+                                                >
+                                                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+                                                    </svg>
+                                                </button>
+                                                <!-- Delete Contact -->
+                                                <button 
+                                                    type="button" 
+                                                    on:click={() => deleteContact(index)} 
+                                                    class="p-2 bg-white/5 hover:bg-red-600 hover:text-white rounded-lg text-white/50 transition-all"
+                                                    title="Eliminar contacto"
+                                                >
+                                                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                                                    </svg>
+                                                </button>
+                                            </div>
+                                        </div>
+                                    {/each}
+                                </div>
+                            {/if}
+                        </div>
+                    {/if}
+
+                    {#if showAddContactForm}
+                        <div transition:slide class="bg-black/40 border border-anti-border/50 rounded-2xl p-5 space-y-4">
+                            <div class="flex justify-between items-center border-b border-anti-border/30 pb-2">
+                                <span class="text-[10px] font-black uppercase tracking-widest text-white/50">
+                                    {editingContactIndex > -1 ? 'Editar Contacto' : 'Nuevo Contacto'}
+                                </span>
+                            </div>
+                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                <div class="space-y-2">
+                                    <span class="text-[9px] font-black uppercase tracking-widest text-white/50 ml-2">Alias</span>
+                                    <input 
+                                        type="text" 
+                                        bind:value={newContactAlias} 
+                                        placeholder="Alias o Nombre" 
+                                        class="w-full bg-black border border-anti-border rounded-xl px-4 py-2.5 text-white placeholder:text-white/20 focus:border-anti-accent outline-none transition-all text-xs" 
+                                    />
+                                </div>
+                                <div class="space-y-2">
+                                    <span class="text-[9px] font-black uppercase tracking-widest text-white/50 ml-2">Dirección</span>
+                                    <input 
+                                        type="text" 
+                                        bind:value={newContactAddress} 
+                                        placeholder="0x..." 
+                                        class="w-full bg-black border border-anti-border rounded-xl px-4 py-2.5 text-white placeholder:text-white/20 focus:border-anti-accent outline-none transition-all font-mono text-xs" 
+                                    />
+                                </div>
+                            </div>
+                            
+                            {#if contactError}
+                                <div class="text-[9px] font-black text-anti-accent uppercase ml-2 animate-pulse">{contactError}</div>
+                            {/if}
+                            
+                            <div class="flex justify-end pt-1">
+                                <button 
+                                    type="button" 
+                                    on:click={saveContact} 
+                                    class="px-5 py-2 bg-anti-accent text-white font-black text-[10px] uppercase tracking-widest rounded-xl hover:scale-105 transition-transform"
+                                >
+                                    {editingContactIndex > -1 ? 'Actualizar' : 'Guardar'}
+                                </button>
+                            </div>
+                        </div>
+                    {/if}
                 </div>
 
                 <div class="space-y-3">
