@@ -59,11 +59,11 @@
     function confirmToggle(id) {
         const isHidden = hiddenNetworks.includes(id);
         modalConfig = {
-            title: isHidden ? 'Agregar Red' : 'Retirar Red',
+            title: isHidden ? 'Activar Red' : 'Retirar Red',
             message: isHidden 
-                ? '¿Quieres volver a vincular esta red al terminal?' 
+                ? '¿Estás seguro de activar esta red?' 
                 : '¿Seguro que quieres retirar esta red? Se eliminará de tu terminal pero seguirá disponible en Pali Wallet.',
-            confirmText: isHidden ? 'AGREGAR' : 'Retirar Protocolo',
+            confirmText: isHidden ? 'ACTIVAR' : 'Retirar Protocolo',
             action: () => {
                 onToggleHide(id);
                 showModal = false;

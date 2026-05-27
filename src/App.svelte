@@ -585,10 +585,19 @@
               },
             ],
           });
-          await syncAccount(true);
+          await ethereum.request({
+            method: "wallet_switchEthereumChain",
+            params: [{ chainId: net.chainHex }],
+          });
+          showNetworkDropdown = false;
+          activeTab = "wallet";
+          win["sessionStorage"].removeItem("pali_switching");
+          await syncAccount(true, true, false);
+          await refreshBalance();
         } catch (addError) {
           console.error("Error adding network:", addError);
         }
+        return;
       }
       console.error("Error switching network:", err);
     } finally {
