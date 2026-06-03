@@ -105,25 +105,17 @@ export const EVM_NETWORKS = [
         name: 'zk.tanenbaum.io',
         category: 'EVM Networks',
         chainHex: '0xdee1',
-        rpc: 'https://rpc-zk.tanenbaum.io',
-        ticker: 'tSYS',
+        rpc: 'https://rpc-zk.tanenbaum.io/',
+        ticker: 'TSYS',
         explorer: 'https://explorer-zk.tanenbaum.io',
-        nativeCurrencyName: 'Tanenbaum SYS',
+        nativeCurrencyName: 'TSYS',
         iconText: 'ZK',
         tone: 'pink',
-        apiUrl: 'https://explorer-zk.tanenbaum.io/api'
-    },
-    {
-        id: '57042',
-        name: 'zkSYS PoB Dev11',
-        category: 'EVM Networks',
-        chainHex: '0xdeb2',
-        rpc: 'https://rpc-pob.dev11.top',
-        ticker: 'TSYS',
-        explorer: 'https://explorer-pob.dev11.top',
-        nativeCurrencyName: 'Tanenbaum SYS',
-        iconText: 'P',
-        tone: 'amber'
+        apiUrl: 'https://explorer-zk.tanenbaum.io/api',
+        faucets: [
+            'https://faucet.syscoin.org',
+            'https://faucet-zk.tanenbaum.io'
+        ]
     },
     {
         id: '57000',
@@ -140,16 +132,20 @@ export const EVM_NETWORKS = [
     },
     {
         id: '11155111',
-        name: 'Sepolia Testnet',
+        name: 'Sepolia',
         category: 'EVM Networks',
         chainHex: '0xaa36a7',
-        rpc: 'https://rpc.sepolia.org',
+        rpc: 'https://ethereum-sepolia-rpc.publicnode.com/',
         ticker: 'ETH',
         explorer: 'https://sepolia.etherscan.io',
-        nativeCurrencyName: 'Sepolia Ether',
+        nativeCurrencyName: 'ETH',
         iconText: 'SE',
         tone: 'indigo',
-        apiUrl: 'https://api-sepolia.etherscan.io/api'
+        apiUrl: 'https://api.etherscan.io/v2/api',
+        apiChainId: '11155111',
+        faucets: [
+            'https://cloud.google.com/application/web3/faucet/ethereum/sepolia'
+        ]
     },
     {
         id: '56',
@@ -240,12 +236,17 @@ export const EVM_NETWORKS = [
         name: 'Ethereum Hoodi',
         category: 'EVM Networks',
         chainHex: '0x88bb0',
-        rpc: 'https://rpc.hoodi.ethpandaops.io',
+        rpc: 'https://0xrpc.io/hoodi',
         ticker: 'ETH',
-        explorer: 'https://light-hoodi.beaconcha.in',
-        nativeCurrencyName: 'Hoodi ETH',
+        explorer: 'https://hoodi.etherscan.io/',
+        nativeCurrencyName: 'ETH',
         iconText: 'H',
-        tone: 'orange'
+        tone: 'orange',
+        apiUrl: 'https://api.etherscan.io/v2/api',
+        apiChainId: '560048',
+        faucets: [
+            'https://cloud.google.com/application/web3/faucet/ethereum/hoodi'
+        ]
     }
 ];
 
@@ -296,7 +297,10 @@ export function getExplorerApiUrl(id) {
     const network = getEvmNetwork(id);
     if (!network) return '';
     // Use specific apiUrl if defined (e.g., Etherscan)
-    if (network.apiUrl) return network.apiUrl;
+    if (network.apiUrl) {
+        if (network.apiChainId) return `${network.apiUrl}?chainid=${network.apiChainId}`;
+        return network.apiUrl;
+    }
     // Default to Blockscout style /api
     return network.explorer ? `${network.explorer.replace(/\/$/, '')}/api` : '';
 }

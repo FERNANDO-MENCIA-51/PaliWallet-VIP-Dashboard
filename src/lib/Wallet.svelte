@@ -12,12 +12,15 @@
     /** @type {any[]} */
     export let history = [];
     export let historyLoading = false;
+    export let historyPage = 1;
+    export let historyHasNextPage = false;
     /** @type {any} */
     export let signer = null;
 
     export let onTransactionConfirmed = () => {};
-    /** @type {(tx: any) => void} */
-    export let onNewTransaction = (tx) => {};
+    export let onTransactionSubmitted = () => {};
+    export let onHistoryNext = () => {};
+    export let onHistoryPrevious = () => {};
 
     let copied = false;
     let toAddress = '';
@@ -235,17 +238,20 @@
 
             txHash = tx.hash;
             txStatus = 'sent';
-            
-            onNewTransaction({
-                hash: tx.hash, to: toAddress, amount: amount, 
-                type: transferType === 'native' ? 'Sent' : 'Contract Call',
-                timestamp: new Date().toISOString(), status: 'Confirmed',
+            const activityTx = {
+                hash: tx.hash,
+                to: toAddress,
+                amount,
+                type: 'Sent',
+                timestamp: new Date().toISOString(),
+                status: 'Pending',
                 assetSymbol: transferType === 'native' ? nativeTicker : contractTokenName
-            });
+            };
+            onTransactionSubmitted(activityTx);
 
             await tx.wait(1); 
             txStatus = 'confirmed';
-            onTransactionConfirmed();
+            onTransactionConfirmed({ ...activityTx, status: 'Confirmed' });
             amount = ''; toAddress = '';
         } catch (err) {
             error = parseTransactionError(err);
@@ -567,9 +573,38 @@
     <!-- Sidebar Activity -->
     <div class="lg:col-span-5">
         <section class="bg-anti-surface/50 border border-anti-border rounded-[2.5rem] p-10 h-full flex flex-col shadow-xl">
-            <h3 class="font-cinzel text-xl font-black text-white uppercase tracking-tight mb-10">Actividad Reciente</h3>
+            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-10">
+                <h3 class="font-cinzel text-xl font-black text-white uppercase tracking-tight">Actividad Reciente</h3>
+                <div class="flex items-center gap-3">
+                    <button
+                        type="button"
+                        on:click={onHistoryPrevious}
+                        disabled={historyLoading || historyPage <= 1}
+                        class="w-9 h-9 rounded-lg border border-anti-border bg-black/60 text-white/70 hover:text-white hover:border-anti-accent disabled:opacity-20 disabled:hover:border-anti-border transition-colors flex items-center justify-center"
+                        aria-label="Página anterior"
+                        title="Página anterior"
+                    >
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+                        </svg>
+                    </button>
+                    <span class="min-w-18 text-center text-[10px] font-black uppercase tracking-widest text-white/50">Pág. {historyPage}</span>
+                    <button
+                        type="button"
+                        on:click={onHistoryNext}
+                        disabled={historyLoading || !historyHasNextPage}
+                        class="w-9 h-9 rounded-lg border border-anti-border bg-black/60 text-white/70 hover:text-white hover:border-anti-accent disabled:opacity-20 disabled:hover:border-anti-border transition-colors flex items-center justify-center"
+                        aria-label="Página siguiente"
+                        title="Página siguiente"
+                    >
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
             <div class="flex-1 space-y-4 overflow-y-auto pr-2 custom-scrollbar">
-                {#if historyLoading}
+                {#if historyLoading && history.length === 0}
                     <div class="flex flex-col gap-4 animate-pulse">
                         {#each Array(4) as _}
                             <div class="h-24 bg-white/5 rounded-2xl border border-white/5"></div>

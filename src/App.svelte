@@ -54,11 +54,23 @@
   /** @type {any[]} */
   let history = [];
   /** @type {any[]} */
-  let localHistory = [];
-  /** @type {any[]} */
   let tokenHistory = [];
   /** @type {any[]} */
   let explorerHistory = [];
+  /** @type {any[]} */
+  let liveHistory = (() => {
+    try {
+      const saved = localStorage.getItem("fdev_live_history");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return Array.isArray(parsed) ? parsed : [];
+      }
+    } catch (e) {}
+    return [];
+  })();
+  const HISTORY_PAGE_SIZE = 10;
+  let historyPage = 1;
+  let historyHasNextPage = false;
   let activeTab = "intro";
   let showNetworkDropdown = false;
   let showInitialLoader = true;
@@ -76,6 +88,38 @@
       "pali_hidden_networks",
       JSON.stringify(hiddenNetworks),
     );
+  }
+
+  function loadPersistedLiveHistory() {
+    try {
+      const saved = localStorage.getItem("fdev_live_history");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) liveHistory = parsed;
+      }
+    } catch (e) {}
+  }
+
+  function savePersistedLiveHistory() {
+    try {
+      localStorage.setItem(
+        "fdev_live_history",
+        JSON.stringify(liveHistory.slice(0, 20)),
+      );
+    } catch (e) {}
+  }
+
+  function resetHistoryPagination() {
+    historyPage = 1;
+    historyHasNextPage = false;
+    explorerHistory = [];
+    tokenHistory = [];
+  }
+
+  function clearLegacyLocalHistory() {
+    Object.keys(localStorage)
+      .filter((key) => key.startsWith("pali_history_"))
+      .forEach((key) => localStorage.removeItem(key));
   }
 
   const tabs = [
@@ -102,6 +146,7 @@
   ];
 
   onMount(async () => {
+    clearLegacyLocalHistory();
     initAnimations();
     updateTokenAddress();
     try {
@@ -119,6 +164,7 @@
             (a) => a.toLowerCase() === PRIMARY_ACCOUNT.toLowerCase(),
           );
           address = foundMain || accounts[0];
+          resetHistoryPagination();
           connected = true;
           refreshBalance();
         } else if (!win["sessionStorage"].getItem("pali_switching") && !loading) {
@@ -128,6 +174,7 @@
 
       ethereum.on("chainChanged", async (hex) => {
         chainId = parseInt(hex, 16).toString();
+        resetHistoryPagination();
         const eth = win["ethereum"];
         provider = new ethers.BrowserProvider(eth);
         try {
@@ -136,7 +183,7 @@
           console.warn("Could not get signer on chain change:", e);
         }
         refreshBalance();
-        loadExplorerHistory();
+        loadExplorerHistory(1);
       });
     }
   });
@@ -161,7 +208,11 @@
   $: if (address && chainId) {
     refreshBalance();
   }
-  $: history = mergeHistory(explorerHistory, tokenHistory);
+  $: history = mergeHistory(
+    liveHistory,
+    explorerHistory,
+    tokenHistory,
+  );
 
   async function loadTokenBalance() {
     if (!address || !provider) return;
@@ -192,7 +243,7 @@
       .flat()
       .filter((tx) => {
         if (!tx || !tx.hash) return false;
-        const key = `${tx.hash}_${tx.type}_${tx.assetSymbol || ""}_${tx.logIndex ?? ""}_${tx.amount}`;
+        const key = `${tx.hash}_${tx.assetSymbol || ""}_${tx.type || ""}`;
         if (seen.has(key)) return false;
         seen.add(key);
         return true;
@@ -204,20 +255,40 @@
       );
   }
 
-  async function loadExplorerHistory() {
+  function buildExplorerHistoryUrl(apiUrl, params) {
+    const query = new URLSearchParams(params);
+    const apiKey = import.meta.env?.VITE_ETHERSCAN_API_KEY;
+    if (apiKey) query.set("apikey", apiKey);
+    return `${apiUrl}${apiUrl.includes("?") ? "&" : "?"}${query.toString()}`;
+  }
+
+  async function loadExplorerHistory(page = historyPage) {
     if (!address || !chainId || chainId === "utxo") return;
     const apiUrl = getExplorerApiUrl(chainId);
     if (!apiUrl) {
       explorerHistory = [];
+      historyHasNextPage = false;
       return;
     }
     historyLoading = true;
     try {
+      historyPage = page;
+      const params = {
+        module: "account",
+        action: "txlist",
+        address,
+        startblock: "0",
+        endblock: "99999999",
+        page: String(page),
+        offset: String(HISTORY_PAGE_SIZE),
+        sort: "desc",
+      };
       const response = await fetchWithRetry(
-        `${apiUrl}?module=account&action=txlist&address=${address}&sort=desc`,
+        buildExplorerHistoryUrl(apiUrl, params),
       );
       const payload = await response.json();
-      const rows = payload?.result || [];
+      const rows = Array.isArray(payload?.result) ? payload.result : [];
+      historyHasNextPage = rows.length === HISTORY_PAGE_SIZE;
       const ticker = getNetworkTicker(chainId);
       explorerHistory = rows
         .filter((tx) => tx.hash)
@@ -239,70 +310,115 @@
         }));
     } catch (err) {
       console.error("Explorer history load failed:", err);
-      explorerHistory = [];
+      historyHasNextPage = false;
     } finally {
       historyLoading = false;
     }
   }
 
-  async function loadTokenTransferHistory() {
-    if (!provider || !address || !address.startsWith("0x")) return;
+  async function loadPreviousHistoryPage() {
+    if (historyLoading || historyPage <= 1) return;
+    const page = historyPage - 1;
+    await loadExplorerHistory(page);
+    await loadTokenTransferHistory(page);
+  }
+
+  async function loadNextHistoryPage() {
+    if (historyLoading || !historyHasNextPage) return;
+    const page = historyPage + 1;
+    await loadExplorerHistory(page);
+    await loadTokenTransferHistory(page);
+  }
+
+  async function loadTokenTransferHistory(page = historyPage) {
+    if (!address || !chainId || chainId === "utxo" || !address.startsWith("0x")) return;
+    const apiUrl = getExplorerApiUrl(chainId);
+    if (!apiUrl) {
+      tokenHistory = [];
+      return;
+    }
     try {
-      const contract = new ethers.Contract(TOKEN_ADDRESS, ERC20_ABI, provider);
-      const code = await provider.getCode(TOKEN_ADDRESS);
-      if (code === "0x" || code === "0x0") {
-        tokenHistory = [];
-        return;
-      }
-      const [decimals, symbol, latestBlock] = await Promise.all([
-        contract.decimals().catch(() => 18),
-        contract.symbol().catch(() => "TOKEN"),
-        provider.getBlockNumber(),
-      ]);
-      const filterOut = contract.filters.Transfer(address, null);
-      const filterIn = contract.filters.Transfer(null, address);
-      const [logsOut, logsIn] = await Promise.all([
-        contract.queryFilter(filterOut, latestBlock - 5000),
-        contract.queryFilter(filterIn, latestBlock - 5000),
-      ]);
-      const allLogs = [...logsOut, ...logsIn].sort(
-        (a, b) => b.blockNumber - a.blockNumber,
+      const params = {
+        module: "account",
+        action: "tokentx",
+        address,
+        startblock: "0",
+        endblock: "99999999",
+        page: String(page),
+        offset: String(HISTORY_PAGE_SIZE),
+        sort: "desc",
+      };
+      const response = await fetchWithRetry(
+        buildExplorerHistoryUrl(apiUrl, params),
       );
-      tokenHistory = await Promise.all(
-        allLogs.slice(0, 10).map(async (event) => {
-          const block = await provider.getBlock(event.blockNumber);
-          return {
-            hash: event.transactionHash,
-            from: event.args[0],
-            to: event.args[1],
-            amount: ethers.formatUnits(event.args[2], decimals),
-            type:
-              String(event.args[1]).toLowerCase() === address.toLowerCase()
-                ? "Received"
-                : "Sent",
-            timestamp: new Date((block?.timestamp || 0) * 1000).toISOString(),
-            chainId,
-            networkName: getNetworkName(chainId, address),
-            assetSymbol: symbol,
-          };
-        }),
-      );
+      const payload = await response.json();
+      const rows = Array.isArray(payload?.result) ? payload.result : [];
+      tokenHistory = rows
+        .filter((tx) => tx.hash)
+        .map((tx) => ({
+          hash: tx.hash,
+          from: tx.from,
+          to: tx.to,
+          amount: ethers.formatUnits(
+            tx.value || "0",
+            Number(tx.tokenDecimal || 18),
+          ),
+          type:
+            String(tx.to || "").toLowerCase() === address.toLowerCase()
+              ? "Received"
+              : "Sent",
+          timestamp: new Date(Number(tx.timeStamp) * 1000).toISOString(),
+          chainId,
+          networkName: getNetworkName(chainId, address),
+          explorerBase: getExplorerBase(chainId),
+          assetSymbol: tx.tokenSymbol || "TOKEN",
+          status: "Confirmed",
+          logIndex: tx.logIndex,
+        }));
     } catch (err) {
       console.warn("Token history not available");
       tokenHistory = [];
     }
   }
 
-  function recordTransaction(tx) {
-    if (!address) return;
-    localHistory = [
-      { ...tx, timestamp: new Date().toISOString(), source: "local" },
-      ...localHistory,
+  function trackLiveTransaction(tx) {
+    if (!tx?.hash || !address) return;
+    const liveTx = {
+      hash: tx.hash,
+      from: address,
+      to: tx.to,
+      amount: tx.amount || "0",
+      type: tx.type || "Sent",
+      timestamp: tx.timestamp || new Date().toISOString(),
+      chainId,
+      networkName: getNetworkName(chainId, address),
+      explorerBase: getExplorerBase(chainId),
+      assetSymbol: tx.assetSymbol || getNetworkTicker(chainId, address),
+      status: tx.status || "Pending",
+      source: "live",
+    };
+    liveHistory = [
+      liveTx,
+      ...liveHistory.filter((item) => item.hash !== liveTx.hash),
     ];
-    localStorage.setItem(
-      `pali_history_${address.toLowerCase()}`,
-      JSON.stringify(localHistory),
-    );
+    savePersistedLiveHistory();
+  }
+
+  async function handleTransactionConfirmed(tx) {
+    if (tx?.hash) trackLiveTransaction({ ...tx, status: "Confirmed" });
+    if (connected && address && !isSwitching) {
+      try {
+        const eth = window["ethereum"];
+        if (eth) {
+          provider = new ethers.BrowserProvider(eth);
+          const rawBalance = await provider.getBalance(address);
+          balance = ethers.formatEther(rawBalance);
+          loadTokenBalance();
+        }
+      } catch (err) {
+        console.warn("Balance refresh after tx failed:", err);
+      }
+    }
   }
 
   let lastSyncTime = 0;
@@ -364,6 +480,7 @@
           (a) => a.toLowerCase() === PRIMARY_ACCOUNT.toLowerCase(),
         );
         address = foundMain || accounts[0];
+        resetHistoryPagination();
 
         provider = new ethers.BrowserProvider(ethereum);
         signer = await provider.getSigner();
@@ -403,6 +520,7 @@
             (a) => a.toLowerCase() === PRIMARY_ACCOUNT.toLowerCase(),
           );
           address = foundMain || accounts[0];
+          resetHistoryPagination();
           win["sessionStorage"].removeItem("pali_switching");
           provider = new ethers.BrowserProvider(ethereum);
           signer = await provider.getSigner();
@@ -418,6 +536,7 @@
         const account = await pali.request({ method: "sys_getAccount" });
         if (account) {
           address = account.address;
+          resetHistoryPagination();
           balance = account.balance;
           chainId = "utxo";
           connected = true;
@@ -482,6 +601,7 @@
               (a) => a.toLowerCase() === PRIMARY_ACCOUNT.toLowerCase(),
             );
             address = foundMain || accounts[0];
+            resetHistoryPagination();
             provider = new ethers.BrowserProvider(ethereum);
             signer = await provider.getSigner();
             const network = await provider.getNetwork();
@@ -500,6 +620,7 @@
         const account = await pali.request({ method: "sys_getAccount" });
         if (account) {
           address = account.address;
+          resetHistoryPagination();
           balance = account.balance;
           chainId = "utxo";
           connected = true;
@@ -519,6 +640,7 @@
 
   function disconnect() {
     address = "";
+    resetHistoryPagination();
     connected = false;
     activeTab = "intro";
     sessionStorage.removeItem("pali_connected");
@@ -534,6 +656,7 @@
       
       if (chainId === "utxo") {
         address = "";
+        resetHistoryPagination();
         connected = false;
         win["sessionStorage"].removeItem("pali_connected");
         win["sessionStorage"].setItem("pali_switching", "true");
@@ -614,6 +737,7 @@
       const pali = win["pali"];
       if (!pali) return;
       address = "";
+      resetHistoryPagination();
       connected = false;
       win["sessionStorage"].setItem("pali_switching", "true");
       let targetChainId = 57;
@@ -630,6 +754,7 @@
       const account = await pali.request({ method: "sys_getAccount" });
       if (account) {
         address = account.address;
+        resetHistoryPagination();
         balance = account.balance;
         chainId = "utxo";
         connected = true;
@@ -869,8 +994,12 @@
             {tokenBalance}
             {signer}
             {historyLoading}
-            onTransactionConfirmed={refreshBalance}
-            onNewTransaction={recordTransaction}
+            {historyPage}
+            {historyHasNextPage}
+            onHistoryNext={loadNextHistoryPage}
+            onHistoryPrevious={loadPreviousHistoryPage}
+            onTransactionSubmitted={trackLiveTransaction}
+            onTransactionConfirmed={handleTransactionConfirmed}
           />
         {/if}
       {:else if activeTab === "networks"}
