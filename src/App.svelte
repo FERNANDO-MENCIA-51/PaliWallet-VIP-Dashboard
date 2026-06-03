@@ -39,6 +39,10 @@
   } from "./lib/config/networks.js";
   import { fetchWithRetry } from "./composables/retry.js";
 
+  // Nota: al estar en el frontend, esta clave queda visible en el bundle final.
+  // Si quieres usarla fija en nube, pégala aquí.
+  const ETHERSCAN_API_KEY = "BJZQDBBWHAM5X9PVTWUBCCT7DXX4ZMAUVF";
+
   let address = "";
   let balance = "";
   let isSwitching = false;
@@ -257,9 +261,24 @@
 
   function buildExplorerHistoryUrl(apiUrl, params) {
     const query = new URLSearchParams(params);
-    const apiKey = import.meta.env?.VITE_ETHERSCAN_API_KEY;
+    const apiKey = ETHERSCAN_API_KEY.trim();
     if (apiKey) query.set("apikey", apiKey);
     return `${apiUrl}${apiUrl.includes("?") ? "&" : "?"}${query.toString()}`;
+  }
+
+  function getExplorerRows(payload, emptyLabel = "No transactions found") {
+    if (Array.isArray(payload?.result)) return payload.result;
+
+    const message = String(payload?.message || "");
+    const result = String(payload?.result || "");
+    const isEmptyResponse =
+      message.toLowerCase().includes(emptyLabel.toLowerCase()) ||
+      result.toLowerCase().includes(emptyLabel.toLowerCase()) ||
+      result.toLowerCase().includes("no records found");
+
+    if (isEmptyResponse) return [];
+
+    throw new Error(result || message || "Explorer API error");
   }
 
   async function loadExplorerHistory(page = historyPage) {
@@ -287,7 +306,7 @@
         buildExplorerHistoryUrl(apiUrl, params),
       );
       const payload = await response.json();
-      const rows = Array.isArray(payload?.result) ? payload.result : [];
+      const rows = getExplorerRows(payload, "No transactions found");
       historyHasNextPage = rows.length === HISTORY_PAGE_SIZE;
       const ticker = getNetworkTicker(chainId);
       explorerHistory = rows
@@ -352,7 +371,7 @@
         buildExplorerHistoryUrl(apiUrl, params),
       );
       const payload = await response.json();
-      const rows = Array.isArray(payload?.result) ? payload.result : [];
+      const rows = getExplorerRows(payload, "No token transfers found");
       tokenHistory = rows
         .filter((tx) => tx.hash)
         .map((tx) => ({
