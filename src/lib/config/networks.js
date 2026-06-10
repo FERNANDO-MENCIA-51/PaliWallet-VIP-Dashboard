@@ -118,19 +118,6 @@ export const EVM_NETWORKS = [
         ]
     },
     {
-        id: '57000',
-        name: 'Rollux Testnet',
-        category: 'EVM Networks',
-        chainHex: '0xdea8',
-        rpc: 'https://rpc-testnet.rollux.com',
-        ticker: 'tSYS',
-        explorer: 'https://rollux.tanenbaum.io',
-        nativeCurrencyName: 'Test Syscoin',
-        iconText: 'RT',
-        tone: 'blue',
-        apiUrl: 'https://rollux.tanenbaum.io/api'
-    },
-    {
         id: '11155111',
         name: 'Sepolia',
         category: 'EVM Networks',
@@ -194,18 +181,6 @@ export const EVM_NETWORKS = [
         nativeCurrencyName: 'Sepolia Ether',
         iconText: 'AT',
         tone: 'sky'
-    },
-    {
-        id: '80001',
-        name: 'Polygon Testnet',
-        category: 'EVM Networks',
-        chainHex: '0x13881',
-        rpc: 'https://rpc-mumbai.maticvigil.com',
-        ticker: 'MATIC',
-        explorer: 'https://mumbai.polygonscan.com',
-        nativeCurrencyName: 'MATIC',
-        iconText: 'PT',
-        tone: 'violet'
     },
     {
         id: '59140',

@@ -17,6 +17,30 @@
     export let utxoNetworks = [];
 
     let filter = 'visibles'; // 'visibles' | 'ocultas' | 'todas'
+    let bulkModeOn = false;
+    let selected = new Set();
+
+    function toggleSelected(id) {
+        if (selected.has(id)) selected.delete(id);
+        else selected.add(id);
+        selected = selected;
+    }
+
+    function bulkHide() {
+        for (const id of selected) {
+            if (!hiddenNetworks.includes(id)) onToggleHide(id);
+        }
+        selected = new Set();
+        bulkModeOn = false;
+    }
+
+    function bulkShow() {
+        for (const id of selected) {
+            if (hiddenNetworks.includes(id)) onToggleHide(id);
+        }
+        selected = new Set();
+        bulkModeOn = false;
+    }
 
     // Modal State
     let showModal = false;
@@ -63,7 +87,7 @@
             message: isHidden 
                 ? '¿Estás seguro de activar esta red?' 
                 : '¿Seguro que quieres retirar esta red? Se eliminará de tu terminal pero seguirá disponible en Pali Wallet.',
-            confirmText: isHidden ? 'ACTIVAR' : 'Retirar Protocolo',
+            confirmText: isHidden ? 'RESTAURAR' : 'Retirar Protocolo',
             action: () => {
                 onToggleHide(id);
                 showModal = false;
@@ -89,12 +113,35 @@
         </div>
 
         <!-- Filter Controls -->
-        <div class="flex bg-black/40 border border-anti-border p-1 rounded-2xl">
-            <button on:click={() => filter = 'visibles'} class="px-6 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all {filter === 'visibles' ? 'bg-anti-accent text-white shadow-lg' : 'text-gray-500 hover:text-white'}">Activas</button>
-            <button on:click={() => filter = 'ocultas'} class="px-6 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all {filter === 'ocultas' ? 'bg-anti-accent text-white shadow-lg' : 'text-gray-500 hover:text-white'}">Eliminadas ({hiddenNetworks.length})</button>
-            <button on:click={() => filter = 'todas'} class="px-6 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all {filter === 'todas' ? 'bg-anti-accent text-white shadow-lg' : 'text-gray-500 hover:text-white'}">Todas</button>
+        <div class="flex flex-wrap items-center gap-3">
+            <div class="flex bg-black/40 border border-anti-border p-1 rounded-2xl">
+                <button on:click={() => { filter = 'visibles'; bulkModeOn = false; selected = new Set(); }} class="px-6 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all {filter === 'visibles' ? 'bg-anti-accent text-white shadow-lg' : 'text-gray-500 hover:text-white'}">Activas</button>
+                <button on:click={() => { filter = 'ocultas'; bulkModeOn = false; selected = new Set(); }} class="px-6 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all {filter === 'ocultas' ? 'bg-anti-accent text-white shadow-lg' : 'text-gray-500 hover:text-white'}">Eliminadas ({hiddenNetworks.length})</button>
+                <button on:click={() => { filter = 'todas'; bulkModeOn = false; selected = new Set(); }} class="px-6 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all {filter === 'todas' ? 'bg-anti-accent text-white shadow-lg' : 'text-gray-500 hover:text-white'}">Todas</button>
+            </div>
+            <button on:click={() => { bulkModeOn = !bulkModeOn; if (!bulkModeOn) selected = new Set(); }} class="px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all border {bulkModeOn ? 'bg-anti-accent text-white border-anti-accent' : 'border-anti-border text-gray-500 hover:text-white'}">
+                {bulkModeOn ? 'SALIR SELECCIÓN' : 'SELECCIÓN MÚLTIPLE'}
+            </button>
         </div>
     </header>
+
+    {#if bulkModeOn}
+        <div class="flex gap-3 flex-wrap" transition:fade>
+            {#if selected.size > 0}
+                {#if filter === 'visibles' || filter === 'todas'}
+                    <button on:click={bulkHide} class="px-6 py-3 bg-red-500/20 border border-red-500/50 text-red-500 font-black text-[10px] uppercase tracking-widest rounded-2xl hover:bg-red-500 hover:text-white transition-all">
+                        RETIRAR ({selected.size})
+                    </button>
+                {/if}
+                {#if filter === 'ocultas' || filter === 'todas'}
+                    <button on:click={bulkShow} class="px-6 py-3 bg-green-500/20 border border-green-500/50 text-green-500 font-black text-[10px] uppercase tracking-widest rounded-2xl hover:bg-green-500 hover:text-white transition-all">
+                        RESTAURAR ({selected.size})
+                    </button>
+                {/if}
+            {/if}
+            <span class="text-[10px] text-gray-500 font-mono self-center">{selected.size} seleccionadas</span>
+        </div>
+    {/if}
 
     <!-- EVM Section -->
     <section class="space-y-8">
@@ -110,7 +157,7 @@
                     {@const isHidden = hiddenNetworks.includes(net.id)}
                     {@const isActive = currentChainId === net.id}
                     
-                    <div class="bg-anti-surface border {isActive ? 'border-anti-accent shadow-[0_0_30px_rgba(230,0,0,0.15)]' : 'border-anti-border'} rounded-3xl p-8 flex flex-col gap-6 relative group transition-all hover:border-anti-accent/50 {isHidden ? 'opacity-60' : ''}">
+                    <div class="bg-anti-surface border {selected.has(net.id) ? 'border-red-500 ring-2 ring-red-500/30' : isActive ? 'border-anti-accent shadow-[0_0_30px_rgba(230,0,0,0.15)]' : 'border-anti-border'} rounded-3xl p-8 flex flex-col gap-6 relative group transition-all hover:border-anti-accent/50 {isHidden ? 'opacity-60' : ''}" role="button" tabindex={bulkModeOn ? 0 : -1} class:cursor-pointer={bulkModeOn} on:click={bulkModeOn ? () => toggleSelected(net.id) : undefined} on:keydown={bulkModeOn ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleSelected(net.id); } } : undefined}>
                         {#if isActive}
                             <div class="absolute top-6 right-6">
                                 <div class="flex items-center gap-2 px-3 py-1 bg-anti-accent/10 border border-anti-accent/20 rounded-full">
@@ -143,7 +190,7 @@
 
                         <div class="flex gap-2 mt-2">
                             {#if isHidden}
-                                <button on:click={() => confirmToggle(net.id)} class="flex-1 py-3 bg-green-500/20 border border-green-500/50 text-green-500 font-black font-cinzel text-xs rounded-xl hover:bg-green-500 hover:text-white transition-all">ACTIVAR</button>
+                                <button on:click={() => confirmToggle(net.id)} class="flex-1 py-3 bg-green-500/20 border border-green-500/50 text-green-500 font-black font-cinzel text-xs rounded-xl hover:bg-green-500 hover:text-white transition-all">RESTAURAR</button>
                             {:else}
                                 <button on:click={() => confirmSwitch(net)} class="flex-1 py-3 bg-white text-black font-black font-cinzel text-xs rounded-xl hover:bg-anti-accent hover:text-white transition-all">CAMBIAR</button>
                                 <button on:click={() => confirmToggle(net.id)} class="px-4 py-3 border border-anti-border rounded-xl transition-all hover:bg-red-900/10 hover:border-red-500/50" title="Retirar Red">

@@ -29,6 +29,8 @@
   import Wallet from "./lib/Wallet.svelte";
   import Networks from "./lib/Networks.svelte";
   import Contracts from "./lib/Contracts.svelte";
+  import BalanceChecker from "./lib/BalanceChecker.svelte";
+  import Faucet from "./lib/Faucet.svelte";
   import {
     getExplorerApiUrl,
     getExplorerBase,
@@ -77,6 +79,8 @@
   let historyHasNextPage = false;
   let activeTab = "intro";
   let showNetworkDropdown = false;
+  let showToolsDropdown = false;
+  let showAllNetworks = false;
   let showInitialLoader = true;
   let hiddenNetworks = JSON.parse(
     localStorage.getItem("pali_hidden_networks") || "[]",
@@ -146,6 +150,16 @@
       id: "contracts",
       label: "Contratos",
       icon: "M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z",
+    },
+    {
+      id: "saldo",
+      label: "Saldo",
+      icon: "M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z",
+    },
+    {
+      id: "faucet",
+      label: "Faucet",
+      icon: "M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10",
     }
   ];
 
@@ -663,6 +677,13 @@
     connected = false;
     activeTab = "intro";
     sessionStorage.removeItem("pali_connected");
+    try {
+      const eth = window["ethereum"];
+      if (eth) {
+        eth.request({ method: "wallet_revokePermissions", params: [{ eth_accounts: {} }] }).catch(() => {});
+      }
+    } catch (e) {}
+    ["fdev_token_address", "fdev_live_history", "fdev_contacts", "pali_hidden_networks"].forEach((k) => localStorage.removeItem(k));
   }
 
   async function switchNetwork(net) {
@@ -790,12 +811,14 @@
 
   function toggleDropdown() {
     showNetworkDropdown = !showNetworkDropdown;
+    if (!showNetworkDropdown) showAllNetworks = false;
   }
   function handleTabClick(tab) {
-    if (connected || tab.id === "intro") activeTab = tab.id;
+    if (connected || tab.id === "intro" || tab.id === "saldo" || tab.id === "faucet") activeTab = tab.id;
   }
   function handleGlobalClick() {
     showNetworkDropdown = false;
+    showToolsDropdown = false;
   }
 </script>
 
@@ -886,32 +909,61 @@
       </div>
 
       <div class="hidden lg:flex gap-2">
-        {#each tabs as tab}
-          <button
-            on:click={() => handleTabClick(tab)}
-            class="px-5 py-2.5 rounded-xl text-sm font-bold transition-all flex items-center gap-3
-                        {activeTab === tab.id
+        <button
+          on:click={() => handleTabClick(tabs[0])}
+          class="px-5 py-2.5 rounded-xl text-sm font-bold transition-all flex items-center gap-3
+            {activeTab === 'intro'
               ? 'bg-anti-accent text-white shadow-[0_0_20px_rgba(230,0,0,0.3)]'
-              : 'text-white/50 hover:text-white hover:bg-white/5'}
-                        {!connected && tab.id !== 'intro'
-              ? 'opacity-20 cursor-not-allowed'
-              : ''}"
-          >
-            <svg
-              class="w-4 h-4"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-              ><path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d={tab.icon}
-              /></svg
+              : 'text-white/50 hover:text-white hover:bg-white/5'}"
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d={tabs[0].icon} /></svg>
+          {tabs[0].label}
+        </button>
+
+        {#if connected}
+          {#each tabs.slice(1, 4) as tab}
+            <button
+              on:click={() => handleTabClick(tab)}
+              class="px-5 py-2.5 rounded-xl text-sm font-bold transition-all flex items-center gap-3
+                {activeTab === tab.id
+                  ? 'bg-anti-accent text-white shadow-[0_0_20px_rgba(230,0,0,0.3)]'
+                  : 'text-white/50 hover:text-white hover:bg-white/5'}"
             >
-            {tab.label}
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d={tab.icon} /></svg>
+              {tab.label}
+            </button>
+          {/each}
+        {/if}
+
+        <div class="relative">
+          <button
+            on:click|stopPropagation={() => showToolsDropdown = !showToolsDropdown}
+            class="px-5 py-2.5 rounded-xl text-sm font-bold transition-all flex items-center gap-3
+              {activeTab === 'saldo' || activeTab === 'faucet'
+                ? 'bg-anti-accent text-white shadow-[0_0_20px_rgba(230,0,0,0.3)]'
+                : 'text-white/50 hover:text-white hover:bg-white/5'}"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /></svg>
+            Herramientas
+            <svg class="w-3 h-3 ml-1 transition-transform {showToolsDropdown ? 'rotate-180' : ''}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" /></svg>
           </button>
-        {/each}
+          {#if showToolsDropdown}
+            <div
+              class="absolute left-0 mt-3 w-44 bg-anti-surface border border-anti-border rounded-2xl shadow-2xl overflow-hidden py-2 animate-in fade-in zoom-in-95"
+            >
+              <div class="px-5 py-2 text-[8px] font-black text-white/30 uppercase tracking-[0.3em]">HERRAMIENTAS</div>
+              {#each tabs.slice(4) as tab}
+                <button
+                  on:click={() => { activeTab = tab.id; showToolsDropdown = false; }}
+                  class="w-full text-left px-5 py-3 text-xs font-bold hover:bg-anti-accent/10 transition-colors flex items-center gap-3 {activeTab === tab.id ? 'text-anti-accent' : 'text-white/50'}"
+                >
+                  <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d={tab.icon} /></svg>
+                  {tab.label}
+                </button>
+              {/each}
+            </div>
+          {/if}
+        </div>
       </div>
     </div>
 
@@ -944,23 +996,41 @@
             </button>
           </button>
           {#if showNetworkDropdown}
+            {@const visibleNetworks = EVM_NETWORKS.filter((n) => !hiddenNetworks.includes(n.id)).sort((a) => (a.id === chainId ? -1 : 0))}
             <div
-              class="absolute right-0 mt-3 w-56 bg-anti-surface border border-anti-border rounded-2xl shadow-2xl overflow-y-auto max-h-80 custom-scrollbar py-2 animate-in fade-in zoom-in-95"
+              class="absolute right-0 mt-3 bg-anti-surface border border-anti-border rounded-2xl shadow-2xl overflow-y-auto max-h-96 custom-scrollbar py-2 animate-in fade-in zoom-in-95"
+              class:w-72={showAllNetworks}
+              class:w-56={!showAllNetworks}
             >
-              {#each EVM_NETWORKS.filter((n) => !hiddenNetworks.includes(n.id)) as net}
+              <div
+                class:grid={showAllNetworks}
+                class:grid-cols-2={showAllNetworks}
+                class:flex={!showAllNetworks}
+                class:flex-col={!showAllNetworks}
+              >
+                {#each (showAllNetworks ? visibleNetworks : visibleNetworks.slice(0, 6)) as net}
+                  <button
+                    on:click={() => switchNetwork(net)}
+                    class="text-left px-5 py-3 text-xs font-bold hover:bg-anti-accent/10 transition-colors flex items-center justify-between {chainId ===
+                    net.id
+                      ? 'text-anti-accent'
+                      : 'text-white/50'}"
+                  >
+                    {net.name}
+                    {#if chainId === net.id}<div
+                        class="w-1.5 h-1.5 rounded-full bg-anti-accent shrink-0"
+                      ></div>{/if}
+                  </button>
+                {/each}
+              </div>
+              {#if visibleNetworks.length > 6}
                 <button
-                  on:click={() => switchNetwork(net)}
-                  class="w-full text-left px-5 py-3 text-xs font-bold hover:bg-anti-accent/10 transition-colors flex items-center justify-between {chainId ===
-                  net.id
-                    ? 'text-anti-accent'
-                    : 'text-white/50'}"
+                  on:click|stopPropagation={() => (showAllNetworks = !showAllNetworks)}
+                  class="w-full text-center px-5 py-2 text-[10px] font-black uppercase tracking-widest text-anti-accent hover:bg-anti-accent/10 transition-colors border-t border-anti-border/50"
                 >
-                  {net.name}
-                  {#if chainId === net.id}<div
-                      class="w-1.5 h-1.5 rounded-full bg-anti-accent"
-                    ></div>{/if}
+                  {showAllNetworks ? "Ver menos ▲" : "Ver más ▼"}
                 </button>
-              {/each}
+              {/if}
             </div>
           {/if}
         </div>
@@ -1039,6 +1109,10 @@
           {signer}
           {provider}
         />
+      {:else if activeTab === "saldo"}
+        <BalanceChecker />
+      {:else if activeTab === "faucet"}
+        <Faucet />
       {/if}
     </div>
   </main>

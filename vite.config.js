@@ -6,5 +6,10 @@ export default defineConfig({
   plugins: [
     svelte(),
     tailwindcss(),
-  ]
+  ],
+  server: {
+    proxy: {
+      "/api": "http://localhost:3001",
+    },
+  },
 })
