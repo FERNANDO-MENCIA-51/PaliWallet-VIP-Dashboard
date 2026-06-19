@@ -3,6 +3,7 @@
   import { onMount } from "svelte";
   import { fade, slide } from "svelte/transition";
   import { EVM_NETWORKS } from "./config/networks.js";
+  import { fetchWithRetry } from "../composables/retry.js";
 
   // Configuración de faucets por red
   const FAUCET_CONFIGS = {
@@ -64,14 +65,6 @@
     checkFaucetBalance();
   });
 
-  async function api(method, path, body) {
-    const opts = { method, headers: { "Content-Type": "application/json" } };
-    if (body) opts.body = JSON.stringify(body);
-    const res = await fetch(`/api${path}`, opts);
-    if (!res.ok) throw new Error(await res.text());
-    return res.json();
-  }
-
   let historyError = "";
 
   async function loadHistory() {
@@ -79,7 +72,9 @@
     historyError = "";
     try {
       const networkParam = historyFilter !== "all" ? `?network=${encodeURIComponent(historyFilter)}` : "";
-      const data = await api("GET", `/faucet-history${networkParam}`);
+      const res = await fetchWithRetry(`/api/faucet-history${networkParam}`, { method: "GET" });
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
       faucetHistory = Array.isArray(data) ? data : [];
     } catch (e) {
       faucetHistory = [];
@@ -93,7 +88,12 @@
   async function addHistoryEntry(entry) {
     faucetHistory = [entry, ...faucetHistory];
     try {
-      await api("POST", "/faucet-history", { address: entry.address, txHash: entry.txHash, network: entry.network });
+      const res = await fetchWithRetry("/api/faucet-history", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ address: entry.address, txHash: entry.txHash, network: entry.network }),
+      });
+      if (!res.ok) throw new Error(await res.text());
     } catch (e) {
       console.warn("Faucet API save failed — entry not persisted:", e);
     }
@@ -206,7 +206,7 @@
       faucetHistory = faucetHistory.map((e) =>
         e.txHash === tx.hash ? { ...e, status: "Confirmed" } : e,
       );
-      try { await api("PUT", `/faucet-history/${tx.hash}`); } catch (e) {}
+      try { await fetchWithRetry(`/api/faucet-history/${tx.hash}`, { method: "PUT" }); } catch (e) {}
 
       faucetSuccess = "Tokens enviados exitosamente";
       recipientAddress = "";
@@ -235,7 +235,7 @@
 
   async function clearHistory() {
     faucetHistory = [];
-    try { await api("DELETE", "/faucet-history"); } catch (e) {}
+    try { await fetchWithRetry("/api/faucet-history", { method: "DELETE" }); } catch (e) {}
   }
 
   function shortAddr(addr) {
