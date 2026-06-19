@@ -1,3 +1,6 @@
+# Runtime data
+data/faucet-history.json
+
 # Logs
 logs
 *.log

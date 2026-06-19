@@ -2,10 +2,28 @@
   import { ethers } from "ethers";
   import { onMount } from "svelte";
   import { fade, slide } from "svelte/transition";
+  import { EVM_NETWORKS } from "./config/networks.js";
 
-  const CONTRACT_ADDRESS = "0xe6868E13E60c58839819967B50fe76324efBD5e9";
-  const SEPOLIA_RPC = "https://ethereum-sepolia-rpc.publicnode.com/";
-  const SEPOLIA_CHAIN_ID = "11155111";
+  // Configuración de faucets por red
+  const FAUCET_CONFIGS = {
+    "11155111": {
+      contractAddress: "0xe6868E13E60c58839819967B50fe76324efBD5e9",
+      rpc: "https://ethereum-sepolia-rpc.publicnode.com/",
+      name: "Sepolia"
+    },
+    "57057": {
+      contractAddress: "0xe6868E13E60c58839819967B50fe76324efBD5e9",
+      rpc: "https://rpc-zk.tanenbaum.io/",
+      name: "zk.tanenbaum.io"
+    },
+    "5700": {
+      contractAddress: "0xe6868E13E60c58839819967B50fe76324efBD5e9",
+      rpc: "https://rpc.tanenbaum.io",
+      name: "Syscoin NEVM Testnet"
+    }
+  };
+
+  let selectedNetwork = "11155111"; // Default: Sepolia
 
 
   const FAUCET_ABI = [
@@ -27,6 +45,19 @@
   let faucetHistory = [];
   let faucetBalance = "";
   let faqOpen = false;
+  let historyFilter = "all";
+  let historyLoading = false;
+
+  // Obtener configuración actual del faucet
+  $: currentFaucetConfig = FAUCET_CONFIGS[selectedNetwork] || FAUCET_CONFIGS["11155111"];
+
+  // Filtrar historial según selección
+  $: filteredHistory = historyFilter === "all"
+    ? faucetHistory
+    : faucetHistory.filter(entry => entry.network === historyFilter);
+
+  // Obtener redes únicas del historial para el filtro
+  $: availableNetworks = ["all", ...new Set(faucetHistory.map(entry => entry.network))];
 
   onMount(() => {
     loadHistory();
@@ -41,20 +72,31 @@
     return res.json();
   }
 
+  let historyError = "";
+
   async function loadHistory() {
+    historyLoading = true;
+    historyError = "";
     try {
-      const data = await api("GET", "/faucet-history");
+      const networkParam = historyFilter !== "all" ? `?network=${encodeURIComponent(historyFilter)}` : "";
+      const data = await api("GET", `/faucet-history${networkParam}`);
       faucetHistory = Array.isArray(data) ? data : [];
     } catch (e) {
       faucetHistory = [];
+      historyError = "Servidor API no disponible";
+      console.warn("Faucet history API error:", e);
+    } finally {
+      historyLoading = false;
     }
   }
 
   async function addHistoryEntry(entry) {
     faucetHistory = [entry, ...faucetHistory];
     try {
-      await api("POST", "/faucet-history", { address: entry.address, txHash: entry.txHash });
-    } catch (e) {}
+      await api("POST", "/faucet-history", { address: entry.address, txHash: entry.txHash, network: entry.network });
+    } catch (e) {
+      console.warn("Faucet API save failed — entry not persisted:", e);
+    }
   }
 
   function getPrivateKey() {
@@ -63,11 +105,13 @@
 
   let claimAmountDisplay = "";
   let cooldownDisplay = "";
+  let remainingCooldown = 0;
+  let remainingCooldownText = "";
 
   async function checkFaucetBalance() {
     try {
-      const provider = new ethers.JsonRpcProvider(SEPOLIA_RPC);
-      const contract = new ethers.Contract(CONTRACT_ADDRESS, FAUCET_ABI, provider);
+      const provider = new ethers.JsonRpcProvider(currentFaucetConfig.rpc);
+      const contract = new ethers.Contract(currentFaucetConfig.contractAddress, FAUCET_ABI, provider);
 
       const [bal, amount, cooldown] = await Promise.all([
         contract.getFaucetBalance().catch(() => null),
@@ -79,6 +123,38 @@
       if (amount !== null) claimAmountDisplay = ethers.formatEther(amount);
       if (cooldown !== null) cooldownDisplay = (Number(cooldown) / 3600).toFixed(0) + "h";
     } catch (e) {}
+  }
+
+  function formatCooldown(seconds) {
+    if (seconds <= 0) return "";
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    if (h > 0) return `${h}h ${m}m`;
+    return `${m}m ${seconds % 60}s`;
+  }
+
+  async function checkCooldown(address) {
+    if (!address || !ethers.isAddress(address)) {
+      remainingCooldown = 0;
+      remainingCooldownText = "";
+      return;
+    }
+    try {
+      const provider = new ethers.JsonRpcProvider(currentFaucetConfig.rpc);
+      const contract = new ethers.Contract(currentFaucetConfig.contractAddress, FAUCET_ABI, provider);
+      const secs = Number(await contract.getRemainingCooldown(address));
+      remainingCooldown = secs;
+      remainingCooldownText = secs > 0 ? formatCooldown(secs) : "";
+    } catch (e) {
+      remainingCooldown = 0;
+      remainingCooldownText = "";
+    }
+  }
+
+  let cooldownTimer;
+  function checkCooldownDebounced() {
+    clearTimeout(cooldownTimer);
+    cooldownTimer = setTimeout(() => checkCooldown(recipientAddress.trim()), 600);
   }
 
   async function requestTokens() {
@@ -102,11 +178,17 @@
       return;
     }
 
+    await checkCooldown(targetAddress);
+    if (remainingCooldown > 0) {
+      faucetError = `Ya reclamaste recientemente. Debes esperar ${remainingCooldownText} para volver a solicitar.`;
+      return;
+    }
+
     requesting = true;
     try {
-      const provider = new ethers.JsonRpcProvider(SEPOLIA_RPC);
+      const provider = new ethers.JsonRpcProvider(currentFaucetConfig.rpc);
       const wallet = new ethers.Wallet(pk, provider);
-      const contract = new ethers.Contract(CONTRACT_ADDRESS, FAUCET_ABI, wallet);
+      const contract = new ethers.Contract(currentFaucetConfig.contractAddress, FAUCET_ABI, wallet);
 
       let tx = await contract["claimTo(address)"](targetAddress);
 
@@ -115,7 +197,7 @@
         address: targetAddress,
         txHash: tx.hash,
         timestamp: new Date().toISOString(),
-        network: "Sepolia",
+        network: currentFaucetConfig.name,
         status: "Pending",
       });
 
@@ -132,7 +214,15 @@
     } catch (err) {
       console.error("Faucet error:", err);
       if (err.code === "CALL_EXCEPTION") {
-        faucetError = "El contrato rechazó la llamada. El faucet puede estar vacío o el cooldown activo.";
+        const msg = err.reason || err.message || "";
+        if (msg.includes("cooldown") || msg.includes("Cooldown")) {
+          await checkCooldown(targetAddress);
+          faucetError = remainingCooldown > 0
+            ? `Cooldown activo. Espera ${remainingCooldownText} para reclamar de nuevo.`
+            : "Cooldown activo. Intenta más tarde.";
+        } else {
+          faucetError = "El contrato rechazó la llamada. El faucet puede estar vacío o el cooldown activo.";
+        }
       } else if (err.code === "INSUFFICIENT_FUNDS") {
         faucetError = "La wallet del faucet no tiene fondos para pagar gas.";
       } else {
@@ -164,7 +254,7 @@
           </svg>
         </div>
         <div>
-          <h3 class="text-white font-cinzel text-xl font-black tracking-tight">Faucet Sepolia</h3>
+          <h3 class="text-white font-cinzel text-xl font-black tracking-tight">Faucet {currentFaucetConfig.name}</h3>
           <p class="text-[10px] text-anti-accent font-black uppercase tracking-wider">Sin conexión de wallet • Automatizado por contrato</p>
           {#if faucetBalance}
             <p class="text-[8px] text-white/30 font-mono mt-1">
@@ -179,6 +269,27 @@
 
       <div class="space-y-6">
         <div class="space-y-3">
+          <label class="text-[10px] font-black uppercase tracking-widest text-white/50 ml-4">
+            Seleccionar Red
+          </label>
+          <select
+            bind:value={selectedNetwork}
+            on:change={() => {
+              faucetBalance = "";
+              claimAmountDisplay = "";
+              cooldownDisplay = "";
+              remainingCooldown = 0;
+              remainingCooldownText = "";
+              checkFaucetBalance();
+            }}
+            class="w-full bg-black border border-anti-border rounded-2xl px-6 py-4 text-white focus:border-anti-accent focus:ring-4 focus:ring-anti-accent/10 outline-none transition-all font-mono text-sm"
+          >
+            {#each Object.keys(FAUCET_CONFIGS) as netId}
+              <option value={netId}>{FAUCET_CONFIGS[netId].name}</option>
+            {/each}
+          </select>
+        </div>
+        <div class="space-y-3">
           <label for="faucetAddress" class="text-[10px] font-black uppercase tracking-widest text-white/50 ml-4">
             Tu dirección de wallet
           </label>
@@ -186,9 +297,20 @@
             id="faucetAddress"
             type="text"
             bind:value={recipientAddress}
+            on:input={checkCooldownDebounced}
             placeholder="0x... (dirección donde recibirás los tokens)"
             class="w-full bg-black border border-anti-border rounded-2xl px-6 py-4 text-white placeholder:text-white/20 focus:border-anti-accent focus:ring-4 focus:ring-anti-accent/10 outline-none transition-all font-mono text-sm"
           />
+          {#if remainingCooldownText}
+            <div class="flex items-center gap-2 px-4 py-2 bg-yellow-900/10 border border-yellow-500/30 rounded-2xl">
+              <svg class="w-4 h-4 text-yellow-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <span class="text-[9px] font-black text-yellow-500 uppercase tracking-wider">
+                Cooldown activo — espera {remainingCooldownText}
+              </span>
+            </div>
+          {/if}
         </div>
 
         {#if faucetError}
@@ -266,19 +388,42 @@
           </div>
           <h3 class="font-cinzel text-xl font-black text-white uppercase tracking-tight">Historial Faucet</h3>
         </div>
-        {#if faucetHistory.length > 0}
-          <button
-            on:click={clearHistory}
-            class="text-[9px] text-white/30 hover:text-anti-accent uppercase tracking-widest font-black transition-colors"
-          >
-            Limpiar
-          </button>
-        {/if}
+        <div class="flex items-center gap-4">
+          {#if availableNetworks.length > 1}
+            <select
+              bind:value={historyFilter}
+              on:change={loadHistory}
+              class="bg-black/60 border border-anti-border rounded-xl px-4 py-2 text-white text-[9px] font-black uppercase tracking-wider focus:border-anti-accent outline-none"
+            >
+              <option value="all">Todas las redes</option>
+              {#each availableNetworks.filter(n => n !== "all") as network}
+                <option value={network}>{network}</option>
+              {/each}
+            </select>
+          {/if}
+          {#if faucetHistory.length > 0}
+            <button
+              on:click={clearHistory}
+              class="text-[9px] text-white/30 hover:text-anti-accent uppercase tracking-widest font-black transition-colors"
+            >
+              Limpiar
+            </button>
+          {/if}
+        </div>
       </div>
 
       <div class="flex-1 space-y-4 overflow-y-auto pr-2 custom-scrollbar">
-        {#if faucetHistory.length > 0}
-          {#each faucetHistory as entry}
+        {#if historyError && !historyLoading && faucetHistory.length === 0}
+          <div class="p-4 bg-red-900/10 border border-red-500/30 rounded-2xl text-red-500 text-[9px] font-black uppercase tracking-wider" transition:slide>
+            {historyError} — asegúrate de ejecutar <span class="font-mono bg-black/30 px-2 py-0.5 rounded">npm run server</span>
+          </div>
+        {:else if historyLoading}
+          <div class="flex flex-col items-center justify-center h-60 opacity-40">
+            <div class="w-10 h-10 border-2 border-anti-accent border-t-transparent rounded-full animate-spin mb-4"></div>
+            <p class="text-[10px] font-black uppercase tracking-[0.3em] text-white/50">Cargando historial...</p>
+          </div>
+        {:else if filteredHistory.length > 0}
+          {#each filteredHistory as entry}
             <div class="bg-black/60 border border-anti-border p-5 rounded-2xl flex items-center justify-between group hover:border-anti-accent transition-all">
               <div class="flex items-center gap-4">
                 <div class="w-10 h-10 rounded-xl bg-anti-accent/10 flex items-center justify-center">
@@ -320,7 +465,9 @@
             <svg class="w-16 h-16 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
-            <p class="text-[10px] font-black uppercase tracking-[0.3em]">Sin actividad de faucet</p>
+            <p class="text-[10px] font-black uppercase tracking-[0.3em]">
+              {historyFilter === "all" ? "Sin actividad de faucet" : "Sin transacciones en esta red"}
+            </p>
           </div>
         {/if}
       </div>

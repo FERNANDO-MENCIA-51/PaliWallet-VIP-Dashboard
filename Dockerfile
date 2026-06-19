@@ -10,20 +10,25 @@ COPY . .
 RUN npm run build
 
 # Production stage
-FROM nginx:stable-alpine as production-stage
+FROM node:20-alpine
 
-COPY --from=build-stage /app/dist /usr/share/nginx/html
+WORKDIR /app
 
-# Custom nginx config to handle SPA routing if needed
-RUN echo 'server { \
-    listen 80; \
-    location / { \
-        root /usr/share/nginx/html; \
-        index index.html index.htm; \
-        try_files $uri $uri/ /index.html; \
-    } \
-}' > /etc/nginx/conf.d/default.conf
+COPY --from=build-stage /app/dist ./dist
+COPY server/ ./server/
+COPY data/ ./data/
 
-EXPOSE 80
+RUN npm install --omit=dev
 
-CMD ["nginx", "-g", "daemon off;"]
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup && \
+    chown -R appuser:appgroup /app/data
+
+VOLUME /app/data
+
+EXPOSE 3001
+
+ENV NODE_ENV=production
+
+USER appuser
+
+CMD ["node", "server/index.js"]

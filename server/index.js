@@ -1,12 +1,18 @@
 import express from "express";
 import cors from "cors";
-import { readFileSync, writeFileSync, existsSync } from "fs";
-import { join, dirname } from "path";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
+import { join, dirname, resolve } from "path";
 import { fileURLToPath } from "url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const DATA_FILE = join(__dirname, "data.json");
+const DATA_DIR = resolve(process.env.DATA_DIR || join(__dirname, "..", "data"));
+const DATA_FILE = join(DATA_DIR, "faucet-history.json");
 const PORT = process.env.PORT || 3001;
+const isProduction = process.env.NODE_ENV === "production";
+
+if (!existsSync(DATA_DIR)) {
+  mkdirSync(DATA_DIR, { recursive: true });
+}
 
 function readHistory() {
   if (!existsSync(DATA_FILE)) return [];
@@ -25,12 +31,19 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-app.get("/api/faucet-history", (_req, res) => {
-  res.json(readHistory());
+app.get("/api/faucet-history", (req, res) => {
+  const { network } = req.query;
+  let history = readHistory();
+
+  if (network && network !== "all") {
+    history = history.filter(entry => entry.network === network);
+  }
+
+  res.json(history);
 });
 
 app.post("/api/faucet-history", (req, res) => {
-  const { address, txHash } = req.body;
+  const { address, txHash, network } = req.body;
   if (!address || !txHash) {
     return res.status(400).json({ error: "address and txHash required" });
   }
@@ -39,7 +52,7 @@ app.post("/api/faucet-history", (req, res) => {
     address,
     txHash,
     timestamp: new Date().toISOString(),
-    network: "Sepolia",
+    network: network || "Sepolia",
     status: "Pending",
   };
   history.unshift(entry);
@@ -60,6 +73,14 @@ app.delete("/api/faucet-history", (_req, res) => {
   writeHistory([]);
   res.json({ ok: true });
 });
+
+if (isProduction) {
+  const distPath = join(__dirname, "..", "dist");
+  app.use(express.static(distPath));
+  app.get("*", (_req, res) => {
+    res.sendFile(join(distPath, "index.html"));
+  });
+}
 
 app.listen(PORT, () => {
   console.log(`Faucet API running on http://localhost:${PORT}`);

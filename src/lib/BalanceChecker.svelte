@@ -15,6 +15,7 @@
   let checking = false;
   let results = [];
   let error = "";
+  let selectedNetwork = "all"; // "all" para todas las redes, o chainId específico
 
   function isValidAddress(addr) {
     try { return ethers.isAddress(addr); } catch (e) { return false; }
@@ -88,7 +89,12 @@
     if (!isValidAddress(addr)) { error = "Dirección inválida (debe ser 0x...)"; return; }
 
     checking = true;
-    const networks = buildNetworkList();
+    let networks = buildNetworkList();
+
+    // Filtrar por red específica si se seleccionó una
+    if (selectedNetwork !== "all") {
+      networks = networks.filter(n => n.id === selectedNetwork);
+    }
 
     const batch = networks.map(async (net) => {
       const rpcs = (net.rpc ? [net.rpc] : []).concat(FALLBACK_RPCS[net.id] || []);
@@ -163,21 +169,34 @@
         <label for="balanceAddress" class="text-[10px] font-black uppercase tracking-widest text-white/50 ml-4">
           Dirección de Wallet
         </label>
-        <div class="flex gap-2">
-          <input
-            id="balanceAddress"
-            type="text"
-            bind:value={addressInput}
-            placeholder="0x... (Dirección pública)"
-            class="flex-1 bg-black border border-anti-border rounded-2xl px-6 py-4 text-white placeholder:text-white/20 focus:border-anti-accent focus:ring-4 focus:ring-anti-accent/10 outline-none transition-all font-mono text-sm"
-          />
-          <button
-            on:click={checkAllBalances}
-            disabled={checking || !addressInput.trim()}
-            class="px-8 py-4 bg-anti-accent text-white font-black font-cinzel rounded-2xl hover:scale-105 active:scale-95 disabled:opacity-50 transition-all text-sm tracking-wider shadow-[0_0_15px_rgba(230,0,0,0.3)]"
-          >
-            {checking ? "CONSULTANDO..." : "CONSULTAR"}
-          </button>
+        <div class="flex flex-col gap-3">
+          <div class="flex gap-2">
+            <input
+              id="balanceAddress"
+              type="text"
+              bind:value={addressInput}
+              placeholder="0x... (Dirección pública)"
+              class="flex-1 bg-black border border-anti-border rounded-2xl px-6 py-4 text-white placeholder:text-white/20 focus:border-anti-accent focus:ring-4 focus:ring-anti-accent/10 outline-none transition-all font-mono text-sm"
+            />
+            <button
+              on:click={checkAllBalances}
+              disabled={checking || !addressInput.trim()}
+              class="px-8 py-4 bg-anti-accent text-white font-black font-cinzel rounded-2xl hover:scale-105 active:scale-95 disabled:opacity-50 transition-all text-sm tracking-wider shadow-[0_0_15px_rgba(230,0,0,0.3)]"
+            >
+              {checking ? "CONSULTANDO..." : "CONSULTAR"}
+            </button>
+          </div>
+          <div class="flex gap-2">
+            <select
+              bind:value={selectedNetwork}
+              class="flex-1 bg-black border border-anti-border rounded-2xl px-6 py-3 text-white focus:border-anti-accent focus:ring-4 focus:ring-anti-accent/10 outline-none transition-all font-mono text-xs"
+            >
+              <option value="all">Todas las redes</option>
+              {#each buildNetworkList() as net}
+                <option value={net.id}>{net.name} ({net.ticker})</option>
+              {/each}
+            </select>
+          </div>
         </div>
         {#if error}
           <div class="text-[10px] text-red-500 font-bold uppercase ml-4">{error}</div>
