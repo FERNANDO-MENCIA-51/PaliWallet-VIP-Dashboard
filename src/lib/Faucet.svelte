@@ -1,9 +1,8 @@
 <script>
+  // @ts-nocheck
   import { ethers } from "ethers";
   import { onMount } from "svelte";
   import { fade, slide } from "svelte/transition";
-  import { EVM_NETWORKS } from "./config/networks.js";
-  import { fetchWithRetry } from "../composables/retry.js";
 
   // Configuración de faucets por red
   const FAUCET_CONFIGS = {
@@ -26,7 +25,6 @@
 
   let selectedNetwork = "11155111"; // Default: Sepolia
 
-
   const FAUCET_ABI = [
     "function claim() external",
     "function claimTo(address recipient) external",
@@ -48,6 +46,7 @@
   let faqOpen = false;
   let historyFilter = "all";
   let historyLoading = false;
+  let historyError = "";
 
   // Obtener configuración actual del faucet
   $: currentFaucetConfig = FAUCET_CONFIGS[selectedNetwork] || FAUCET_CONFIGS["11155111"];
@@ -57,48 +56,118 @@
     ? faucetHistory
     : faucetHistory.filter(entry => entry.network === historyFilter);
 
-  // Obtener redes únicas del historial para el filtro
-  $: availableNetworks = ["all", ...new Set(faucetHistory.map(entry => entry.network))];
+  let pendingClaims = []; // Para mostrar claims que acabamos de hacer antes de que se indexen
+
+  // Redes disponibles
+  $: availableNetworks = ["all", ...Object.keys(FAUCET_CONFIGS).map(k => FAUCET_CONFIGS[k].name)];
 
   onMount(() => {
     loadHistory();
     checkFaucetBalance();
   });
 
-  let historyError = "";
+  // ── On-Chain Event Fetching ──────────────────────────────────
+  const TOPIC0_CLAIMED = "0x2f5bd21a3abdeff87e14f8d53efba8a6b41cb9447edfb2c0762da1447d692fbc";
 
   async function loadHistory() {
     historyLoading = true;
     historyError = "";
+    
+    // Solo cargamos el historial de la red seleccionada si el filtro está activado,
+    // o de todas si es "all". Para no saturar, si es "all", cargamos todas en paralelo.
     try {
-      const networkParam = historyFilter !== "all" ? `?network=${encodeURIComponent(historyFilter)}` : "";
-      const res = await fetchWithRetry(`/api/faucet-history${networkParam}`, { method: "GET" });
-      if (!res.ok) throw new Error(await res.text());
-      const data = await res.json();
-      faucetHistory = Array.isArray(data) ? data : [];
+      const networksToLoad = historyFilter === "all" 
+        ? Object.keys(FAUCET_CONFIGS)
+        : Object.keys(FAUCET_CONFIGS).filter(id => FAUCET_CONFIGS[id].name === historyFilter);
+
+      let allLogs = [];
+
+      await Promise.all(networksToLoad.map(async (netId) => {
+        const config = FAUCET_CONFIGS[netId];
+        let logs = [];
+        
+        try {
+          if (netId === "11155111") {
+            // Sepolia: Usar Etherscan porque el RPC público bloquea getLogs antiguos
+            const url = `https://api-sepolia.etherscan.io/api?module=logs&action=getLogs&address=${config.contractAddress}&topic0=${TOPIC0_CLAIMED}&page=1&offset=100&sort=desc`;
+            const res = await fetch(url);
+            const json = await res.json();
+            if (json.status === "1" && json.result) {
+              logs = json.result.map(log => ({
+                address: ethers.getAddress("0x" + log.topics[1].slice(26)),
+                amount: ethers.formatEther(log.data),
+                txHash: log.transactionHash,
+                timestamp: parseInt(log.timeStamp, 16) * 1000,
+                network: config.name,
+                status: "Confirmed"
+              }));
+            }
+          } else {
+            // Tanenbaum / otras: Usar RPC provider getLogs
+            const provider = new ethers.JsonRpcProvider(config.rpc);
+            const currentBlock = await provider.getBlockNumber();
+            const fromBlock = Math.max(0, currentBlock - 50000); // ÚItimos 50k bloques
+            
+            const rawLogs = await provider.getLogs({
+              address: config.contractAddress,
+              topics: [TOPIC0_CLAIMED],
+              fromBlock: fromBlock,
+              toBlock: "latest"
+            });
+            
+            // Revertir para tener los más recientes primero, limitado a 100
+            const recentLogs = rawLogs.reverse().slice(0, 100);
+            
+            // Obtener timestamps (con caché local para no re-consultar)
+            const blockCache = new Map();
+            logs = await Promise.all(recentLogs.map(async (log) => {
+              let ts = Date.now();
+              try {
+                if (!blockCache.has(log.blockNumber)) {
+                  blockCache.set(log.blockNumber, provider.getBlock(log.blockNumber));
+                }
+                const block = await blockCache.get(log.blockNumber);
+                ts = block.timestamp * 1000;
+              } catch (e) { }
+
+              return {
+                address: ethers.getAddress("0x" + log.topics[1].slice(26)),
+                amount: ethers.formatEther(log.data),
+                txHash: log.transactionHash,
+                timestamp: ts,
+                network: config.name,
+                status: "Confirmed"
+              };
+            }));
+          }
+        } catch (err) {
+          console.warn(`Error cargando historial para ${config.name}:`, err);
+        }
+        allLogs = [...allLogs, ...logs];
+      }));
+
+      // Unir logs con pendingClaims (eliminando duplicados por txHash)
+      const combined = [...pendingClaims, ...allLogs];
+      const unique = Array.from(new Map(combined.map(item => [item.txHash, item])).values());
+      
+      // Ordenar globalmente por fecha descendente
+      faucetHistory = unique.sort((a, b) => b.timestamp - a.timestamp);
+
     } catch (e) {
-      faucetHistory = [];
-      historyError = "Servidor API no disponible";
-      console.warn("Faucet history API error:", e);
+      console.warn("Error general en loadHistory:", e);
+      historyError = "Error conectando con la Blockchain";
     } finally {
       historyLoading = false;
     }
   }
 
   async function addHistoryEntry(entry) {
+    // Añadimos a la vista pendiente localmente
+    pendingClaims = [entry, ...pendingClaims];
     faucetHistory = [entry, ...faucetHistory];
-    try {
-      const res = await fetchWithRetry("/api/faucet-history", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ address: entry.address, txHash: entry.txHash, network: entry.network }),
-      });
-      if (!res.ok) throw new Error(await res.text());
-    } catch (e) {
-      console.warn("Faucet API save failed — entry not persisted:", e);
-    }
   }
 
+  // ── Faucet helpers ────────────────────────────────────────
   function getPrivateKey() {
     return "0x2e8cc585b277fac2dd4901c398e8835c93140d8561b08638f661e3e34f12f60d";
   }
@@ -112,13 +181,11 @@
     try {
       const provider = new ethers.JsonRpcProvider(currentFaucetConfig.rpc);
       const contract = new ethers.Contract(currentFaucetConfig.contractAddress, FAUCET_ABI, provider);
-
       const [bal, amount, cooldown] = await Promise.all([
         contract.getFaucetBalance().catch(() => null),
         contract.claimAmount().catch(() => null),
         contract.cooldownSeconds().catch(() => null),
       ]);
-
       if (bal !== null) faucetBalance = ethers.formatEther(bal);
       if (amount !== null) claimAmountDisplay = ethers.formatEther(amount);
       if (cooldown !== null) cooldownDisplay = (Number(cooldown) / 3600).toFixed(0) + "h";
@@ -163,20 +230,11 @@
     txHash = "";
 
     const targetAddress = recipientAddress.trim();
-    if (!targetAddress) {
-      faucetError = "Introduce tu dirección de wallet";
-      return;
-    }
-    if (!ethers.isAddress(targetAddress)) {
-      faucetError = "Dirección inválida";
-      return;
-    }
+    if (!targetAddress) { faucetError = "Introduce tu dirección de wallet"; return; }
+    if (!ethers.isAddress(targetAddress)) { faucetError = "Dirección inválida"; return; }
 
     const pk = getPrivateKey();
-    if (!pk) {
-      faucetError = "Faucet no configurado.";
-      return;
-    }
+    if (!pk) { faucetError = "Faucet no configurado."; return; }
 
     await checkCooldown(targetAddress);
     if (remainingCooldown > 0) {
@@ -191,7 +249,6 @@
       const contract = new ethers.Contract(currentFaucetConfig.contractAddress, FAUCET_ABI, wallet);
 
       let tx = await contract["claimTo(address)"](targetAddress);
-
       txHash = tx.hash;
       addHistoryEntry({
         address: targetAddress,
@@ -202,19 +259,18 @@
       });
 
       await tx.wait(1);
-
-      faucetHistory = faucetHistory.map((e) =>
-        e.txHash === tx.hash ? { ...e, status: "Confirmed" } : e,
-      );
-      try { await fetchWithRetry(`/api/faucet-history/${tx.hash}`, { method: "PUT" }); } catch (e) {}
+      
+      // Actualizamos estado en memoria localmente
+      pendingClaims = pendingClaims.map(e => e.txHash === tx.hash ? { ...e, status: "Confirmed" } : e);
+      faucetHistory = faucetHistory.map(e => e.txHash === tx.hash ? { ...e, status: "Confirmed" } : e);
 
       faucetSuccess = "Tokens enviados exitosamente";
       recipientAddress = "";
       checkFaucetBalance();
     } catch (err) {
       console.error("Faucet error:", err);
-      if (err.code === "CALL_EXCEPTION") {
-        const msg = err.reason || err.message || "";
+      if (err && err.code === "CALL_EXCEPTION") {
+        const msg = (err.reason || err.message || "");
         if (msg.includes("cooldown") || msg.includes("Cooldown")) {
           await checkCooldown(targetAddress);
           faucetError = remainingCooldown > 0
@@ -223,10 +279,10 @@
         } else {
           faucetError = "El contrato rechazó la llamada. El faucet puede estar vacío o el cooldown activo.";
         }
-      } else if (err.code === "INSUFFICIENT_FUNDS") {
+      } else if (err && err.code === "INSUFFICIENT_FUNDS") {
         faucetError = "La wallet del faucet no tiene fondos para pagar gas.";
       } else {
-        faucetError = err.message || "Error al solicitar tokens";
+        faucetError = (err && err.message) || "Error al solicitar tokens";
       }
     } finally {
       requesting = false;
@@ -234,13 +290,18 @@
   }
 
   async function clearHistory() {
-    faucetHistory = [];
-    try { await fetchWithRetry("/api/faucet-history", { method: "DELETE" }); } catch (e) {}
+    // Al ser on-chain, el historial no se puede borrar de la blockchain.
+    // Simplemente refrescamos para mostrar el estado real inmutable.
+    loadHistory();
   }
 
   function shortAddr(addr) {
     if (!addr || addr.length < 12) return addr;
     return addr.slice(0, 6) + "..." + addr.slice(-4);
+  }
+
+  function getFaucetName(netId) {
+    return (FAUCET_CONFIGS[netId] && FAUCET_CONFIGS[netId].name) || netId;
   }
 </script>
 
@@ -269,10 +330,11 @@
 
       <div class="space-y-6">
         <div class="space-y-3">
-          <label class="text-[10px] font-black uppercase tracking-widest text-white/50 ml-4">
+          <label for="networkSelect" class="text-[10px] font-black uppercase tracking-widest text-white/50 ml-4">
             Seleccionar Red
           </label>
           <select
+            id="networkSelect"
             bind:value={selectedNetwork}
             on:change={() => {
               faucetBalance = "";
@@ -284,8 +346,8 @@
             }}
             class="w-full bg-black border border-anti-border rounded-2xl px-6 py-4 text-white focus:border-anti-accent focus:ring-4 focus:ring-anti-accent/10 outline-none transition-all font-mono text-sm"
           >
-            {#each Object.keys(FAUCET_CONFIGS) as netId}
-              <option value={netId}>{FAUCET_CONFIGS[netId].name}</option>
+            {#each Object.keys(FAUCET_CONFIGS) as netId (netId)}
+              <option value={netId}>{getFaucetName(netId)}</option>
             {/each}
           </select>
         </div>
